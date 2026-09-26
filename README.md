@@ -4,6 +4,22 @@ Ein selbst gehostetes Tool, das neue Stellenanzeigen sammelt und dir ein
 Kanban-Board ("Scrum-Board") gibt, um sie zu bewerten und Bewerbungen
 vorzubereiten (Anschreiben, Lebenslauf, Notizen - alles an einem Ort).
 
+## Schnellstart (macOS, empfohlen)
+
+Einmalig: `start.command` im Finder doppelklicken (Rechtsklick &rarr; "Oeffnen",
+falls macOS beim ersten Mal wegen "unbekannter Entwickler" warnt). Das
+Skript richtet beim allerersten Start automatisch alles ein (virtuelle
+Umgebung, Abhaengigkeiten, `config.yaml`) und startet danach die App - der
+Browser oeffnet sich von selbst auf http://127.0.0.1:5000.
+
+Ab dann reicht fuer jeden weiteren Start wirklich nur noch: **Doppelklick
+auf `start.command`.** Zum Beenden einfach das Terminal-Fenster schliessen,
+das sich dabei oeffnet.
+
+(Der Rest dieser README beschreibt den manuellen Weg per Terminal - nuetzlich
+zum Verstehen, was im Hintergrund passiert, oder falls du z.B. auf Windows/Linux
+oder einem Server ohne Doppelklick arbeitest.)
+
 ## Was es kann
 
 - **Board:** Spalten `Neu -> Interessant -> In Vorbereitung -> Beworben -> Rueckmeldung erhalten`.
@@ -140,7 +156,10 @@ cp config.example.yaml config.yaml
 python run.py
 ```
 
-Dann im Browser: http://127.0.0.1:5000
+`run.py` oeffnet automatisch den Standard-Browser auf http://127.0.0.1:5000,
+sobald der Server steht (genau das macht auch `start.command`). Falls das
+mal nicht gewuenscht ist (z.B. auf einem Server ohne Desktop), mit
+`NO_AUTO_BROWSER=1 python run.py` starten.
 
 Der eingebaute Scheduler sucht danach automatisch im konfigurierten Abstand
 nach neuen Jobs, solange die App laeuft. Zusaetzlich gibt es im UI oben den
