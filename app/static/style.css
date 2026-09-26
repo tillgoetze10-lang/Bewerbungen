@@ -479,3 +479,5 @@ details.subtle > summary { cursor: pointer; font-size: 0.8rem; color: var(--text
 .stack label.inline-check, label.inline-check { flex-direction: row; align-items: center; gap: 0.5rem; color: var(--text); font-size: 0.9rem; }
 .stack input[type=checkbox], .checkbox-list input { width: 16px; height: 16px; flex: none; }
 button.small { white-space: nowrap; }
+
+.suggestion-group { margin: 1.1rem 0 0.2rem; font-size: 0.8rem; color: var(--accent-strong); text-transform: uppercase; letter-spacing: 0.04em; }

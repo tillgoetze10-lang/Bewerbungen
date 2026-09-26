@@ -37,9 +37,11 @@ def search_company(company_name: str, career_url: str, config: dict):
 
     relevant = [l for l in listings if score_title(l.title, l.description)[0] > 0]
     if not listings:
+        # Kein Alarm: kleine Firmen haben oft schlicht gerade nichts offen.
         raise ScraperError(
-            f"{company_name}: Karriereseite geladen, aber keine Stellenanzeigen erkannt "
-            "(evtl. per JavaScript geladen oder ungewöhnliches Layout)."
+            f"{company_name}: Seite geladen, aber keine Stellen erkannt – gerade nichts offen "
+            "oder die Liste wird per JavaScript geladen.",
+            kind="blocked",
         )
     return relevant
 

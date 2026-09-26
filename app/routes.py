@@ -9,7 +9,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .company_suggestions import open_suggestions
+from .company_suggestions import SUGGESTION_GROUPS, open_suggestions
 from .config import BASE_DIR, load_config
 from .extraction import empty_result
 from .fetch_jobs import (
@@ -378,7 +378,10 @@ def add_job():
 @bp.route("/firmen")
 def companies():
     sources = CompanySource.query.order_by(CompanySource.name).all()
-    return render_template("companies.html", sources=sources, suggestions=open_suggestions(sources))
+    suggestions = open_suggestions(sources)
+    grouped = [(g, [s for s in suggestions if s["group"] == g]) for g in SUGGESTION_GROUPS]
+    return render_template("companies.html", sources=sources, suggestions=suggestions,
+                           suggestion_groups=[(g, items) for g, items in grouped if items])
 
 
 @bp.route("/firmen/vorschlaege", methods=["POST"])
