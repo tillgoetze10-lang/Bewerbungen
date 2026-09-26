@@ -47,6 +47,7 @@ _SOURCE_PHRASES = {
     "stepstone": "auf StepStone",
     "linkedin": "auf LinkedIn",
     "xing": "auf XING",
+    "dwdl": "auf DWDL.jobs",
 }
 
 

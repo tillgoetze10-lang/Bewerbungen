@@ -499,3 +499,126 @@ class CrewUnitedDiagnosisTests(AppTestCase):
         seed_defaults()
         self.assertIsNone(db.session.get(SourceSetting, "arbeitsagentur"))
         self.assertNotIn("arbeitsagentur", latest_run_per_source())
+
+
+LINKEDIN_ALERT = """<html><body><table>
+<tr><td><a href="https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=abc&refId=x"><img src="logo.png"></a></td>
+<td><a href="https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=abc">Kameraassistent (m/w/d)</a><br>
+Serienwerk GmbH<br>Köln, Nordrhein-Westfalen</td></tr>
+<tr><td><a href="https://www.linkedin.com/comm/jobs/view/4099999999/">Kreditorenbuchhalter (m/w/d)</a><br>Zahlen AG<br>Köln</td></tr>
+<tr><td><a href="https://www.linkedin.com/comm/jobs/view/4088888888/">Ansehen</a>
+<div>Video Editor (m/w/d)<br>Agentur Rot<br>Hürth</div></td></tr>
+<tr><td><a href="https://www.linkedin.com/comm/mynetwork/">Dein Netzwerk</a></td></tr>
+</table></body></html>"""
+
+INDEED_ALERT = """<html><body>
+<a href="https://de.indeed.com/rc/clk/dl?jk=0123456789abcdef&from=ja&tk=zzz">Setrunner (m/w/d)</a>
+<div>Filmproduktion Nord - Hamburg - Drehtage im Oktober</div>
+<a href="https://click.example-mail.com/track?url=https%3A%2F%2Fde.indeed.com%2Fviewjob%3Fjk%3Dfedcba9876543210">Cutter (m/w/d)</a>
+</body></html>"""
+
+STEPSTONE_TEXT_ALERT = """Neue Jobs fuer dich:
+Mediengestalter Bild und Ton (m/w/d)
+https://www.stepstone.de/stellenangebote--Mediengestalter-Bild-und-Ton-Koeln-Studio-GmbH--12345678-inline.html?cid=mail
+"""
+
+
+class MailAlertTests(AppTestCase):
+    def test_parse_linkedin_alert(self):
+        from app.scrapers.mail_alerts import listings_from_html
+
+        jobs = {j.url: j for j in listings_from_html(LINKEDIN_ALERT)}
+        self.assertEqual(len(jobs), 3, "Bild- und Titel-Link derselben Stelle = 1 Job, Netzwerk-Link ignoriert")
+        cam = jobs["https://www.linkedin.com/jobs/view/4012345678/"]
+        self.assertEqual(cam.title, "Kameraassistent (m/w/d)")
+        self.assertEqual(cam.company, "Serienwerk GmbH")
+        self.assertEqual(cam.location, "Köln, Nordrhein-Westfalen")
+        self.assertEqual(cam.source, "linkedin")
+        editor = jobs["https://www.linkedin.com/jobs/view/4088888888/"]
+        self.assertEqual(editor.title, "Video Editor (m/w/d)", "Generischer Linktext -> Titel aus dem Umfeld")
+
+    def test_parse_indeed_and_tracking_redirect(self):
+        from app.scrapers.mail_alerts import listings_from_html
+
+        urls = {j.url: j.title for j in listings_from_html(INDEED_ALERT)}
+        self.assertEqual(urls["https://de.indeed.com/viewjob?jk=0123456789abcdef"], "Setrunner (m/w/d)")
+        self.assertEqual(urls["https://de.indeed.com/viewjob?jk=fedcba9876543210"], "Cutter (m/w/d)")
+
+    def _fake_imap(self, messages):
+        from email.message import EmailMessage
+
+        raw = []
+        for sender, html, plain in messages:
+            msg = EmailMessage()
+            msg["From"] = sender
+            msg["Subject"] = "Neue Jobs"
+            if plain:
+                msg.set_content(html)
+            else:
+                msg.set_content("Text")
+                msg.add_alternative(html, subtype="html")
+            raw.append(msg.as_bytes())
+
+        client = mock.MagicMock()
+        client.select.return_value = ("OK", [b"3"])
+        client.search.side_effect = lambda *args: ("OK", [b"1 2 3"] if args[-1] == '"linkedin.com"' else [b""])
+        client.fetch.side_effect = lambda msg_id, spec: ("OK", [(b"x", raw[int(msg_id) - 1])])
+        return client
+
+    def test_full_cycle_from_mailbox(self):
+        from app.fetch_jobs import run_fetch_cycle
+
+        for key, value in (("mail_address", "ich@example.de"), ("mail_password", "app-pass"), ("mail_provider", "gmx")):
+            db.session.add(AppSetting(key=key, value=value))
+        db.session.commit()
+        client = self._fake_imap([
+            ("LinkedIn <jobs-noreply@linkedin.com>", LINKEDIN_ALERT, False),
+            ("Indeed <alert@indeed.com>", INDEED_ALERT, False),
+            ("StepStone <noreply@stepstone.de>", STEPSTONE_TEXT_ALERT, True),
+        ])
+        requested = []
+
+        def get(url, **kwargs):
+            requested.append(url)
+            return fake_get(url, **kwargs)
+
+        with mock.patch("app.scrapers.mail_alerts.imaplib.IMAP4_SSL", return_value=client) as ssl, \
+                mock.patch.object(http_utils.requests, "get", side_effect=get):
+            run_fetch_cycle(self.app)
+
+        ssl.assert_called_once()
+        self.assertEqual(ssl.call_args[0][0], "imap.gmx.net")
+        client.select.assert_called_with("INBOX", readonly=True)
+        self.assertTrue(all("PEEK" in c.args[1] for c in client.fetch.call_args_list), "Mails nie als gelesen markieren")
+
+        titles = {j.title: j for j in Job.query.all()}
+        self.assertIn("Kameraassistent (m/w/d)", titles)
+        self.assertIn("Setrunner (m/w/d)", titles)
+        self.assertIn("Mediengestalter Bild und Ton (m/w/d)", titles)
+        self.assertNotIn("Kreditorenbuchhalter (m/w/d)", titles)
+        self.assertEqual(titles["Kameraassistent (m/w/d)"].match_label, "top")
+        self.assertFalse(any("linkedin.com" in u or "indeed.com/viewjob" in u or "stepstone.de/stellen" in u for u in requested),
+                         "Portal-Detailseiten werden nicht automatisch abgerufen")
+        self.assertEqual(ScraperRun.query.filter_by(source="mail_alerts").first().kind, "ok")
+
+    def test_wrong_password_is_config_hint(self):
+        import imaplib
+
+        from app.scrapers import mail_alerts
+        from app.scrapers.base import ScraperError
+
+        client = mock.MagicMock()
+        client.login.side_effect = imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+        with mock.patch("app.scrapers.mail_alerts.imaplib.IMAP4_SSL", return_value=client):
+            with self.assertRaises(ScraperError) as ctx:
+                mail_alerts.search({}, {"mail_address": "a@b.de", "mail_password": "x"})
+        self.assertEqual(ctx.exception.kind, "config")
+        self.assertIn("App-Passwort", str(ctx.exception))
+
+    def test_settings_page_saves_mail(self):
+        self.client.post("/einstellungen/mail", data={"mail_provider": "icloud", "mail_address": "ich@icloud.com",
+                                                      "mail_password": "abcd efgh ijkl mnop", "action": "save"})
+        self.assertEqual(db.session.get(AppSetting, "mail_password").value, "abcdefghijklmnop")
+        page = self.client.get("/einstellungen").get_data(as_text=True)
+        self.assertIn("Job-Alarme per E-Mail", page)
+        self.assertNotIn("abcdefghijklmnop", page, "Passwort nie im HTML ausgeben")

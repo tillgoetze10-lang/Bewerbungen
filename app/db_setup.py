@@ -40,6 +40,7 @@ DEFAULT_SEARCH_PROFILES = [
 # Nutzungsbedingungen untersagen automatisierte Abfragen, die Schnittstelle
 # antwortet mit 403. Stellen von dort per Link-Import eintragen.
 DEFAULT_SOURCES = {
+    "mail_alerts": True,
     "adzuna": True,
     "jooble": True,
     "crewunited": True,

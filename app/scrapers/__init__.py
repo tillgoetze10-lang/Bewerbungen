@@ -1,9 +1,10 @@
-from . import adzuna, crewunited, google_jobs, indeed, jooble, stepstone
+from . import adzuna, crewunited, google_jobs, indeed, jooble, mail_alerts, stepstone
 
 # Reihenfolge = Reihenfolge im Suchlauf. LinkedIn ist bewusst nicht dabei
 # (Nutzungsbedingungen verbieten automatisierte Abfragen) - LinkedIn-Jobs
 # per "Job hinzufügen -> Link" eintragen.
 REGISTRY = {
+    "mail_alerts": mail_alerts,
     "adzuna": adzuna,
     "jooble": jooble,
     "crewunited": crewunited,
@@ -13,6 +14,8 @@ REGISTRY = {
 }
 
 SOURCE_LABELS = {
+    "mail_alerts": "Job-Alarme per E-Mail",
+    "dwdl": "DWDL.jobs",
     "arbeitsagentur": "Jobbörse der Arbeitsagentur",
     "adzuna": "Adzuna",
     "jooble": "Jooble",
@@ -27,6 +30,7 @@ SOURCE_LABELS = {
 }
 
 SOURCE_HINTS = {
+    "mail_alerts": "Liest Job-Alarm-Mails von LinkedIn, Indeed, StepStone, XING und Co. aus deinem Postfach. Braucht E-Mail-Adresse und App-Passwort (unten).",
     "adzuna": "Offizielle, kostenlose API und die wichtigste automatische Quelle. Bündelt Anzeigen vieler Jobbörsen und Firmenseiten. Braucht App ID und App Key.",
     "jooble": "Offizielle API, bündelt viele Jobbörsen. Schlüssel kostenlos auf Anfrage.",
     "crewunited": "Film- und TV-Branche. Wird einmal pro Suchlauf abgefragt.",

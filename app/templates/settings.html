@@ -65,6 +65,40 @@
   <p class="hint">LinkedIn verbietet automatische Abfragen. LinkedIn-Jobs trägst du über „+ Job hinzufügen“ per Link ein.</p>
 </section>
 
+<section class="panel narrow" id="mail">
+  <h3>Job-Alarme per E-Mail</h3>
+  <p class="hint">So kommen Stellen von <strong>LinkedIn, Indeed, StepStone und XING</strong> in dein Board, ohne gegen deren
+    Regeln zu verstoßen: Du richtest dort Job-Alarme ein, die App liest die Mails. Sie öffnet dein Postfach nur lesend,
+    markiert nichts als gelesen und verschickt nichts.</p>
+  <ol class="hint steps">
+    <li>Auf LinkedIn, Indeed, StepStone und XING für deine Suchbegriffe (z. B. „Videograf Köln“) einen <strong>Job-Alarm per E-Mail</strong> anlegen.</li>
+    <li>Bei deinem Mail-Anbieter ein <strong>App-Passwort</strong> erstellen. Das ist ein eigenes Passwort nur für diese App, nicht dein normales.
+      {% set p = mail.providers.get(mail.provider) %}{% if p %}<a href="{{ p[2] }}" target="_blank" rel="noopener noreferrer">Anleitung für {{ p[0] }} ↗</a>{% endif %}</li>
+    <li>Hier eintragen, „Verbindung testen“ klicken, fertig.</li>
+  </ol>
+  <form action="{{ url_for('board.save_mail') }}" method="post" class="stack">
+    <label>Mail-Anbieter
+      <select name="mail_provider" onchange="document.getElementById('custom-host').classList.toggle('hidden', this.value !== 'custom')">
+        {% for key, p in mail.providers.items() %}<option value="{{ key }}" {% if key == mail.provider %}selected{% endif %}>{{ p[0] }}</option>{% endfor %}
+        <option value="custom" {% if mail.provider == 'custom' %}selected{% endif %}>Anderer (IMAP-Server angeben)</option>
+      </select>
+    </label>
+    <label id="custom-host" class="{{ '' if mail.provider == 'custom' else 'hidden' }}">IMAP-Server
+      <input type="text" name="mail_imap_host" value="{{ mail.imap_host }}" placeholder="z. B. imap.example.de">
+    </label>
+    <label>E-Mail-Adresse <input type="email" name="mail_address" value="{{ mail.address }}" autocomplete="off"></label>
+    <label>App-Passwort {% if mail.has_password %}<span class="badge badge-top">gespeichert</span>{% endif %}
+      <input type="password" name="mail_password" autocomplete="new-password" placeholder="{{ 'gespeichert – zum Ändern neu eintragen' if mail.has_password else 'xxxx-xxxx-xxxx-xxxx' }}">
+    </label>
+    <div class="inline-form">
+      <button type="submit" name="action" value="save">Speichern</button>
+      <button type="submit" name="action" value="test" class="ghost">Speichern &amp; Verbindung testen</button>
+      {% if mail.has_password %}<label class="inline-check"><input type="checkbox" name="clear_mail"> Zugang entfernen</label>{% endif %}
+    </div>
+  </form>
+  <p class="hint">Gespeichert wird nur lokal auf deinem Mac, in <code>data/app.db</code>.</p>
+</section>
+
 <section class="panel narrow" id="schluessel">
   <h3>API-Schlüssel (optional)</h3>
   <p class="hint">Mehr Treffer über offizielle Schnittstellen. Adzuna ist kostenlos und in 2 Minuten eingerichtet.

@@ -26,6 +26,9 @@ from .scrapers.http_utils import get
 logger = logging.getLogger(__name__)
 
 RUNS_KEPT_PER_SOURCE = 20
+# Diese Portale verbieten automatische Abrufe - ihre Stellen kommen nur ueber
+# Job-Alarm-Mails oder Link-Import, die Detailseiten werden nicht geladen.
+NO_DETAIL_SOURCES = {"linkedin", "indeed", "stepstone", "xing", "arbeitsagentur"}
 # Nach so vielen "blockiert"-Antworten in Folge wird eine Quelle fuer den
 # Rest des Laufs uebersprungen - sonst wartet man z.B. 12x auf StepStone-Timeouts.
 BLOCKED_STREAK_LIMIT = 1
@@ -133,7 +136,8 @@ def store_listing(listing, config, seen_ids, new_top=None) -> bool:
     if first_look.score == 0 and not first_look.candidate:
         return False  # offensichtlich kein Video/Film-Job -> nicht mal Details laden
 
-    details = load_details(listing, config) if config.get("fetch_job_details", True) else None
+    fetch = config.get("fetch_job_details", True) and listing.source not in NO_DETAIL_SOURCES
+    details = load_details(listing, config) if fetch else None
     if details:
         merge_details_into_listing(listing, details)
 

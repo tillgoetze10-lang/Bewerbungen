@@ -24,7 +24,9 @@ from .models import (
     ScraperRun, SearchProfile, SourceSetting, db, is_web_url, make_external_id,
 )
 from .scrapers import REGISTRY, SOURCE_HINTS, SOURCE_LABELS, source_label
+from .scrapers import mail_alerts
 from .scrapers.base import JobListing, ScraperError
+from .scrapers.mail_alerts import PROVIDERS as MAIL_PROVIDERS
 from .scrapers.quick_add import fetch_from_url
 from .status import latest_run_per_source, run_kind
 
@@ -464,7 +466,48 @@ def settings():
         profiles=SearchProfile.query.order_by(SearchProfile.location, SearchProfile.keywords).all(),
         sources=sources,
         key_fields=[(k, label, link, bool(keys.get(k))) for k, label, link in API_KEY_FIELDS],
+        mail={
+            "providers": MAIL_PROVIDERS,
+            "provider": keys.get("mail_provider", "icloud"),
+            "address": keys.get("mail_address", ""),
+            "has_password": bool(keys.get("mail_password")),
+            "imap_host": keys.get("mail_imap_host", ""),
+        },
     )
+
+
+def _set_app_setting(key, value):
+    setting = db.session.get(AppSetting, key) or AppSetting(key=key)
+    setting.value = value
+    db.session.add(setting)
+
+
+@bp.route("/einstellungen/mail", methods=["POST"])
+def save_mail():
+    provider = request.form.get("mail_provider", "icloud")
+    if provider not in MAIL_PROVIDERS and provider != "custom":
+        provider = "icloud"
+    _set_app_setting("mail_provider", provider)
+    _set_app_setting("mail_address", request.form.get("mail_address", "").strip())
+    _set_app_setting("mail_imap_host", request.form.get("mail_imap_host", "").strip() if provider == "custom" else "")
+    password = request.form.get("mail_password", "").strip().replace(" ", "")
+    if request.form.get("clear_mail"):
+        _set_app_setting("mail_password", "")
+        _set_app_setting("mail_address", "")
+    elif password:
+        _set_app_setting("mail_password", password)
+    db.session.commit()
+
+    if request.form.get("action") == "test":
+        try:
+            flash(mail_alerts.test_connection(runtime_config()), "success")
+        except ScraperError as exc:
+            flash(f"Test fehlgeschlagen: {exc}", "error")
+        except Exception as exc:
+            flash(f"Test fehlgeschlagen: {type(exc).__name__}: {exc}", "error")
+    else:
+        flash("E-Mail-Zugang gespeichert.", "success")
+    return redirect(url_for("board.settings") + "#mail")
 
 
 @bp.route("/einstellungen/profil", methods=["POST"])
