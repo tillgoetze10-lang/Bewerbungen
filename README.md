@@ -50,14 +50,14 @@ Alles Weitere wird automatisch ausgelesen.
 
 | Quelle | Wie | Hinweis |
 |---|---|---|
-| **Jobbörse der Arbeitsagentur** | öffentliche Schnittstelle der offiziellen Jobsuche-App ([bundesAPI](https://github.com/bundesAPI/jobsuche-api)) | größte Stellendatenbank in DE, kein Schlüssel nötig |
-| **Adzuna** | offizielle API | kostenloser Schlüssel: https://developer.adzuna.com, bündelt viele Jobbörsen |
+| **Adzuna** | offizielle API | **wichtigste Quelle**, kostenloser Schlüssel: https://developer.adzuna.com |
 | **Jooble** | offizielle API | kostenloser Schlüssel auf Anfrage: https://jooble.org/api/about |
 | **Crew United** | öffentliche Jobliste | Film/TV-Branche |
 | **Google Jobs** | über SerpApi | Schlüssel nötig, kostenpflichtig, max. 1× täglich abgefragt |
 | **Firmen-Karriereseiten** | öffentliche Seite der Firma | du trägst die Firmen ein |
 | **Indeed / StepStone** | standardmäßig **aus** | blockieren automatische Abfragen (HTTP 403 bzw. Zeitüberschreitung). Jobs per Link-Import eintragen |
 | **LinkedIn** | nur Link-Import | Nutzungsbedingungen verbieten automatische Abfragen |
+| **Jobbörse der Arbeitsagentur** | nur Link-Import | Nutzungsbedingungen untersagen automatisierte Abfragen, die Schnittstelle antwortet mit 403 |
 
 Regeln, damit die App auf der sicheren Seite bleibt: Sie respektiert
 `robots.txt`, umgeht keinen Bot-Schutz, wartet zwischen zwei Anfragen an

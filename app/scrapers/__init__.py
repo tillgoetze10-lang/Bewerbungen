@@ -1,10 +1,9 @@
-from . import adzuna, arbeitsagentur, crewunited, google_jobs, indeed, jooble, stepstone
+from . import adzuna, crewunited, google_jobs, indeed, jooble, stepstone
 
 # Reihenfolge = Reihenfolge im Suchlauf. LinkedIn ist bewusst nicht dabei
 # (Nutzungsbedingungen verbieten automatisierte Abfragen) - LinkedIn-Jobs
 # per "Job hinzufügen -> Link" eintragen.
 REGISTRY = {
-    "arbeitsagentur": arbeitsagentur,
     "adzuna": adzuna,
     "jooble": jooble,
     "crewunited": crewunited,
@@ -28,8 +27,7 @@ SOURCE_LABELS = {
 }
 
 SOURCE_HINTS = {
-    "arbeitsagentur": "Offizielle Schnittstelle der Bundesagentur für Arbeit. Kein Schlüssel nötig, zuverlässigste Quelle.",
-    "adzuna": "Offizielle, kostenlose API. Bündelt Anzeigen vieler Jobbörsen und Firmenseiten. Braucht App ID und App Key.",
+    "adzuna": "Offizielle, kostenlose API und die wichtigste automatische Quelle. Bündelt Anzeigen vieler Jobbörsen und Firmenseiten. Braucht App ID und App Key.",
     "jooble": "Offizielle API, bündelt viele Jobbörsen. Schlüssel kostenlos auf Anfrage.",
     "crewunited": "Film- und TV-Branche. Wird einmal pro Suchlauf abgefragt.",
     "google_jobs": "Über den Dienst SerpApi, kostenpflichtig ab 100 Suchen pro Monat. Braucht einen SerpApi-Schlüssel.",

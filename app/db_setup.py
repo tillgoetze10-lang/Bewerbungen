@@ -12,7 +12,7 @@ import logging
 from sqlalchemy import inspect, text
 
 from .config import load_config
-from .models import AppSetting, CoverLetterTemplate, Job, SearchProfile, SourceSetting, db
+from .models import AppSetting, CoverLetterTemplate, Job, ScraperRun, SearchProfile, SourceSetting, db
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,10 @@ DEFAULT_SEARCH_PROFILES = [
 # Indeed/StepStone sind aus: sie blockieren automatische Abfragen nachweislich
 # (403 bzw. Zeitueberschreitung). Adzuna/Jooble/Google laufen erst, wenn im
 # UI ein Schluessel hinterlegt ist.
+# Die Jobboerse der Arbeitsagentur ist bewusst nicht dabei: ihre
+# Nutzungsbedingungen untersagen automatisierte Abfragen, die Schnittstelle
+# antwortet mit 403. Stellen von dort per Link-Import eintragen.
 DEFAULT_SOURCES = {
-    "arbeitsagentur": True,
     "adzuna": True,
     "jooble": True,
     "crewunited": True,
@@ -89,6 +91,14 @@ def seed_defaults():
         from .letters import DEFAULT_TEMPLATE, DEFAULT_TEMPLATE_NAME
 
         db.session.add(CoverLetterTemplate(name=DEFAULT_TEMPLATE_NAME, body=DEFAULT_TEMPLATE))
+
+    # Entfernte Quellen (z.B. Arbeitsagentur) samt altem Status aufraeumen,
+    # damit sie nicht weiter auf der Status-Seite auftauchen.
+    for setting in SourceSetting.query.all():
+        if setting.name not in DEFAULT_SOURCES:
+            ScraperRun.query.filter_by(source=setting.name).delete()
+            db.session.delete(setting)
+    db.session.flush()
 
     known = {s.name for s in SourceSetting.query.all()}
     for name, enabled in DEFAULT_SOURCES.items():

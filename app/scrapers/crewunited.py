@@ -45,10 +45,34 @@ def search(profile: dict, config: dict):
     listings = _parse_listing_page(html, used_url)
     if not listings:
         raise ScraperError(
-            "Crew United: Seite geladen, aber keine Stellen-Links erkannt - vermutlich hat sich "
-            "das Seitenlayout geändert oder die Liste wird per JavaScript geladen."
+            "Crew United: Seite geladen, aber keine Stellen-Links erkannt. "
+            f"Diagnose: {_page_summary(html, used_url)}"
         )
     return listings
+
+
+def _page_summary(html: str, page_url: str) -> str:
+    """Kurzbeschreibung der geladenen Seite fuer die Status-Diagnose: Titel,
+    Textlaenge und eine Auswahl interner Link-Pfade. Damit laesst sich der
+    Scraper anpassen, ohne dass jemand den Seitenquelltext kopieren muss."""
+    soup = BeautifulSoup(html, "html.parser")
+    title = soup.title.get_text(strip=True) if soup.title else "-"
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    text_len = len(soup.get_text(" ", strip=True))
+    paths = []
+    for link in soup.find_all("a", href=True):
+        full = urljoin(BASE_URL, link["href"])
+        parsed = urlparse(full)
+        if "crew-united.com" not in parsed.netloc:
+            continue
+        path = parsed.path
+        if path not in paths:
+            paths.append(path)
+    login = any(k in html.lower() for k in ("login", "anmelden", "einloggen"))
+    sample = ", ".join(paths[:25])
+    return (f"Titel='{title[:80]}', Text={text_len} Zeichen, Links={len(paths)}, "
+            f"Login-Hinweis={'ja' if login else 'nein'}, Linkpfade: {sample}")
 
 
 def _parse_listing_page(html: str, page_url: str):
@@ -61,7 +85,8 @@ def _parse_listing_page(html: str, page_url: str):
         path = urlparse(full_url).path.rstrip("/").lower()
         # Nur Unterseiten der Jobliste (einzelne Anzeigen), nicht die Liste selbst,
         # Filter-/Seitenlinks oder Navigation.
-        if "/jobs/" not in path + "/" or path == list_path or "?" in href:
+        is_job_path = any(part in path for part in ("/jobs/", "/job/", "jobangebot", "stellenangebot", "/gesuche/"))
+        if not is_job_path or path == list_path or "?" in href:
             continue
         if urlparse(full_url).netloc and "crew-united.com" not in urlparse(full_url).netloc:
             continue

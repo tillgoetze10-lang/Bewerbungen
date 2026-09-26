@@ -3,7 +3,6 @@
 Ausfuehren:  .venv/bin/python -m unittest discover -s tests -v
 """
 
-import base64
 import io
 import json
 import os
@@ -40,24 +39,19 @@ class FakeResponse:
         return self._json
 
 
-BA_REFNR = "10000-1234567890-S"
-BA_SEARCH = {
-    "stellenangebote": [
-        {"refnr": BA_REFNR, "titel": "Mediengestalter/in Bild und Ton", "beruf": "Mediengestalter/in - Bild und Ton",
-         "arbeitgeber": "Beispiel Studios GmbH", "arbeitsort": {"ort": "Köln", "region": "Nordrhein-Westfalen"},
-         "aktuelleVeroeffentlichungsdatum": "2026-09-20"},
-        {"refnr": "10000-999-S", "titel": "Kreditorenbuchhalter (m/w/d)", "beruf": "Buchhalter/in",
-         "arbeitgeber": "Zahlen AG", "arbeitsort": {"ort": "Köln"}},
+ADZUNA_SEARCH = {
+    "results": [
+        {"id": 111, "title": "Mediengestalter/in <strong>Bild und Ton</strong>", "company": {"display_name": "Beispiel Studios GmbH"},
+         "location": {"display_name": "Köln, Nordrhein-Westfalen"}, "redirect_url": "https://www.adzuna.de/details/111",
+         "description": "Schnitt und Kamera für TV-Beiträge", "created": "2026-09-20T10:00:00Z"},
+        {"id": 222, "title": "Kreditorenbuchhalter (m/w/d)", "company": {"display_name": "Zahlen AG"},
+         "location": {"display_name": "Köln"}, "redirect_url": "https://www.adzuna.de/details/222", "description": "Buchhaltung"},
     ]
 }
-BA_DETAIL = {
-    "stellenangebotsTitel": "Mediengestalter/in Bild und Ton",
-    "stellenangebotsBeschreibung": (
-        "Deine Aufgaben\n- Schnitt von TV-Beiträgen\n- Kamera bei Außendrehs\n"
-        "Dein Profil\n- Ausbildung als Mediengestalter\n- Premiere Pro\n"
-        "Bewerbung: Bitte sende Lebenslauf und Showreel an Frau Anna Schmidt, bewerbung@beispiel-studios.de"
-    ),
-}
+ADZUNA_DETAIL = """<html><body><h1>Mediengestalter/in Bild und Ton</h1>
+<h3>Deine Aufgaben</h3><ul><li>Schnitt von TV-Beiträgen</li><li>Kamera bei Außendrehs</li></ul>
+<h3>Dein Profil</h3><ul><li>Ausbildung als Mediengestalter</li><li>Premiere Pro</li></ul>
+<p>Bitte sende Lebenslauf und Showreel an Frau Anna Schmidt, bewerbung@beispiel-studios.de</p></body></html>"""
 CREW_LIST = """<html><body>
 <a href="/de/jobs/">Alle Jobs</a>
 <a href="/de/jobs/12345_setrunner-fuer-kinofilm/">Setrunner (m/w/d) für Kinofilm – Drehtage im Oktober</a>
@@ -77,12 +71,11 @@ COMPANY_JOB = """<html><body><h1>Video Editor (m/w/d)</h1><p>Standort Köln-Osse
 def fake_get(url, headers=None, params=None, timeout=None, **kwargs):
     if url.endswith("/robots.txt"):
         return FakeResponse(404)
-    if "rest.arbeitsagentur.de" in url and "/jobdetails/" in url:
-        assert url.endswith(base64.b64encode(BA_REFNR.encode()).decode())
-        assert headers.get("X-API-Key") == "jobboerse-jobsuche"
-        return FakeResponse(json_data=BA_DETAIL)
-    if "rest.arbeitsagentur.de" in url:
-        return FakeResponse(json_data=BA_SEARCH)
+    if url.startswith("https://api.adzuna.com/"):
+        assert params["app_id"] == "id1" and params["app_key"] == "key1"
+        return FakeResponse(json_data=ADZUNA_SEARCH)
+    if url == "https://www.adzuna.de/details/111":
+        return FakeResponse(text=ADZUNA_DETAIL)
     if url.rstrip("/").endswith("crew-united.com/de/jobs"):
         return FakeResponse(text=CREW_LIST)
     if "crew-united.com/de/jobs/12345" in url:
@@ -108,6 +101,9 @@ class AppTestCase(unittest.TestCase):
         self.ctx = self.app.app_context()
         self.ctx.push()
         http_utils._robots_cache.clear()
+        for key, value in (("adzuna_app_id", "id1"), ("adzuna_app_key", "key1")):
+            db.session.add(AppSetting(key=key, value=value))
+        db.session.commit()
 
     def tearDown(self):
         db.session.remove()
@@ -198,8 +194,9 @@ class FetchCycleTests(AppTestCase):
 
         ba = titles["Mediengestalter/in Bild und Ton"]
         self.assertEqual(ba.match_label, "top")
-        self.assertEqual(ba.source_ref, BA_REFNR)
+        self.assertEqual(ba.source, "adzuna")
         self.assertEqual(ba.contact_name, "Anna Schmidt")
+        self.assertEqual(ba.contact_salutation, "Frau")
         self.assertEqual(ba.contact_email, "bewerbung@beispiel-studios.de")
         self.assertIn("Showreel", ba.application_documents)
         self.assertIn("Schnitt von TV-Beiträgen", ba.tasks)
@@ -213,12 +210,13 @@ class FetchCycleTests(AppTestCase):
         self.assertEqual(company_job.company_website, "https://filmhaus-koeln.de")
 
         kinds = {r.source: r.kind for r in ScraperRun.query.all()}
-        self.assertEqual(kinds["arbeitsagentur"], "ok")
+        self.assertEqual(kinds["adzuna"], "ok")
+        self.assertNotIn("arbeitsagentur", kinds)
         self.assertEqual(kinds["crewunited"], "ok")
         self.assertEqual(kinds["indeed"], "blocked")
         self.assertEqual(kinds["stepstone"], "blocked")
         self.assertEqual(kinds["firma:Filmhaus Köln"], "ok")
-        self.assertNotIn("adzuna", kinds, "Ohne Schluessel wird Adzuna uebersprungen")
+        self.assertNotIn("jooble", kinds, "Ohne Schluessel wird Jooble uebersprungen")
         self.assertEqual(result["new_jobs"], Job.query.count())
 
         # Blockierte Quellen sind kein roter Banner
@@ -368,7 +366,7 @@ class OfflineTests(AppTestCase):
             result = run_fetch_cycle(self.app)
         self.assertTrue(result["offline"])
         self.assertEqual(broken_source_names(), [])
-        runs = ScraperRun.query.filter_by(source="arbeitsagentur").all()
+        runs = ScraperRun.query.filter_by(source="adzuna").all()
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].kind, "offline")
         self.assertIn("uebersprungen".replace("ue", "ü"), runs[0].message, "nach dem ersten Verbindungsfehler abbrechen")
@@ -394,7 +392,7 @@ class WorkflowTests(AppTestCase):
         from app.scrapers.base import JobListing
 
         listing = JobListing(title=kwargs.pop("title", "Kameraassistent (m/w/d)"), url="https://x.example/j1",
-                             source=kwargs.pop("source", "arbeitsagentur"), company="Serienwerk GmbH", location="Köln")
+                             source=kwargs.pop("source", "crewunited"), company="Serienwerk GmbH", location="Köln")
         job = job_from_listing(listing, None, 1.0, "top", "")
         for key, value in kwargs.items():
             setattr(job, key, value)
@@ -409,7 +407,7 @@ class WorkflowTests(AppTestCase):
         text = fill_template("{anrede}\n{anrede_du}\nBewerbung als {stelle} bei {firma} {quelle}.", job)
         self.assertIn("Sehr geehrte Frau Schmidt,", text)
         self.assertIn("Hallo Anna,", text)
-        self.assertIn("Bewerbung als Kameraassistent bei Serienwerk GmbH in der Jobbörse", text, "(m/w/d) entfernt")
+        self.assertIn("Bewerbung als Kameraassistent bei Serienwerk GmbH auf Crew United", text, "(m/w/d) entfernt")
         job.contact_name, job.contact_salutation = "", ""
         self.assertIn("Sehr geehrte Damen und Herren,", fill_template("{anrede}", job))
 
@@ -477,3 +475,27 @@ class WorkflowTests(AppTestCase):
         titles = notify.call_args[0][0]
         self.assertIn("Mediengestalter/in Bild und Ton", titles)
         self.assertNotIn("Kreditorenbuchhalter (m/w/d)", titles)
+
+
+class CrewUnitedDiagnosisTests(AppTestCase):
+    def test_unknown_layout_reports_link_paths(self):
+        from app.scrapers import crewunited
+
+        page = '<html><head><title>Jobs | Crew United</title></head><body><a href="/de/Jobboerse/Angebot_123.html">Kamera</a><a href="/de/login">Login</a></body></html>'
+        with mock.patch.object(http_utils.requests, "get", side_effect=lambda url, **kw: FakeResponse(404) if url.endswith("robots.txt") else FakeResponse(text=page)):
+            with self.assertRaises(Exception) as ctx:
+                crewunited.search({}, {"http_timeout_seconds": 5})
+        message = str(ctx.exception)
+        self.assertIn("/de/Jobboerse/Angebot_123.html", message)
+        self.assertIn("Login-Hinweis=ja", message)
+
+    def test_removed_source_is_cleaned_up(self):
+        from app.db_setup import seed_defaults
+        from app.status import latest_run_per_source
+
+        db.session.add(SourceSetting(name="arbeitsagentur", enabled=True))
+        db.session.add(ScraperRun(source="arbeitsagentur", ok=False, kind="blocked", message="403"))
+        db.session.commit()
+        seed_defaults()
+        self.assertIsNone(db.session.get(SourceSetting, "arbeitsagentur"))
+        self.assertNotIn("arbeitsagentur", latest_run_per_source())
