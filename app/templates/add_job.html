@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Job hinzufuegen{% endblock %}
+{% block content %}
+<h1>Job hinzufuegen</h1>
+
+<h3>Per Link (empfohlen, z.B. fuer LinkedIn)</h3>
+<p class="hint">Fuer Quellen mit Bot-Schutz (LinkedIn, teils Indeed/StepStone) den Link
+der Anzeige einfuegen, die du dir selbst angeschaut hast. Es wird genau diese eine
+Seite abgerufen, kein automatisiertes Massen-Crawling.</p>
+<form action="{{ url_for('board.add_job') }}" method="post" class="stack">
+  <input type="hidden" name="mode" value="link">
+  <input type="url" name="url" placeholder="https://..." required>
+  <button type="submit">Job aus Link importieren</button>
+</form>
+
+<h3>Manuell eintragen</h3>
+<form action="{{ url_for('board.add_job') }}" method="post" class="stack">
+  <input type="hidden" name="mode" value="manual">
+  <label>Titel <input type="text" name="title" required></label>
+  <label>Firma <input type="text" name="company"></label>
+  <label>Ort <input type="text" name="location"></label>
+  <label>Link <input type="url" name="url"></label>
+  <label>Gehalt <input type="text" name="salary"></label>
+  <label>Beschreibung <textarea name="description" rows="6"></textarea></label>
+  <button type="submit">Job anlegen</button>
+</form>
+{% endblock %}

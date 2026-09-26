@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block content %}
+<a href="{{ url_for('board.board') }}">&larr; zurueck zum Board</a>
+
+<h1>{{ job.title }}</h1>
+<p class="card-meta">
+  {{ job.company or "Unbekannte Firma" }}{% if job.location %} &middot; {{ job.location }}{% endif %}
+  &middot; Quelle: {{ job.source }}
+  {% if job.salary %}&middot; {{ job.salary }}{% endif %}
+</p>
+<p><a href="{{ job.url }}" target="_blank" rel="noopener">Original-Anzeige oeffnen</a></p>
+
+<form action="{{ url_for('board.update_status', job_id=job.id) }}" method="post" class="inline-form">
+  <input type="hidden" name="next" value="{{ url_for('board.job_detail', job_id=job.id) }}">
+  <label>Status:
+    <select name="status" onchange="this.form.submit()">
+      {% for key, label in status_flow %}
+      <option value="{{ key }}" {% if key == job.status %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+      <option value="{{ archiv_status }}" {% if job.status == archiv_status %}selected{% endif %}>Archiv / Nicht interessant</option>
+    </select>
+  </label>
+</form>
+
+{% if job.description %}
+<h3>Stellenbeschreibung</h3>
+<p class="description">{{ job.description }}</p>
+{% endif %}
+
+<form action="{{ url_for('board.save_job', job_id=job.id) }}" method="post" class="stack">
+  <h3>Anschreiben</h3>
+  <textarea name="cover_letter" rows="14" placeholder="Anschreiben fuer diese Bewerbung...">{{ job.cover_letter }}</textarea>
+
+  <h3>Notizen</h3>
+  <textarea name="notes" rows="6" placeholder="Interner Stand: Kontakt, Gespraechstermine, offene Fragen...">{{ job.notes }}</textarea>
+
+  <button type="submit">Speichern</button>
+</form>
+
+<h3>Dokumente fuer diese Bewerbung</h3>
+<ul class="doc-list">
+  {% for doc in linked_docs %}
+  <li>
+    {{ doc.title }} ({{ doc.doc_type }})
+    <a href="{{ url_for('board.download_document', doc_id=doc.id) }}">herunterladen</a>
+    <form action="{{ url_for('board.unlink_document', job_id=job.id, doc_id=doc.id) }}" method="post" class="inline-form">
+      <button type="submit" class="danger small">entfernen</button>
+    </form>
+  </li>
+  {% else %}
+  <li class="empty">Noch keine Dokumente verknuepft.</li>
+  {% endfor %}
+</ul>
+
+<form action="{{ url_for('board.link_document', job_id=job.id) }}" method="post" class="inline-form">
+  <select name="document_id">
+    {% for doc in library_docs if doc.id not in linked_doc_ids %}
+    <option value="{{ doc.id }}">{{ doc.title }} ({{ doc.doc_type }})</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Aus "Meine Unterlagen" verknuepfen</button>
+</form>
+<p class="hint">Neue Dokumente hochladen: <a href="{{ url_for('board.documents') }}">Meine Unterlagen</a></p>
+{% endblock %}

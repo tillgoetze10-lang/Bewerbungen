@@ -1,0 +1,38 @@
+# Kopiere diese Datei nach config.yaml und passe sie an.
+# config.yaml wird NICHT eingecheckt (siehe .gitignore).
+
+# Suchprofile: eine oder mehrere Kombinationen aus Suchbegriff + Ort.
+# Jedes Profil wird bei jedem Scraper-Lauf gegen jede aktivierte Quelle geprueft.
+search_profiles:
+  - keywords: "Softwareentwickler"
+    location: "Berlin"
+    radius_km: 30
+  - keywords: "Projektleiter Film"
+    location: "Muenchen"
+    radius_km: 50
+
+# Quellen einzeln an-/abschalten. Siehe README fuer rechtliche Hinweise
+# (LinkedIn wird bewusst NICHT automatisiert durchsucht, siehe app/scrapers/linkedin.py).
+sources:
+  indeed:
+    enabled: true
+  stepstone:
+    enabled: true
+  crewunited:
+    enabled: true
+  google_jobs:
+    enabled: false   # benoetigt serpapi_key weiter unten
+  linkedin:
+    enabled: false   # bewusst nur Einzel-Import per Link, siehe README
+
+# Optionaler API-Key fuer SerpApi (https://serpapi.com/google-jobs-api),
+# damit Google-Jobs-Ergebnisse offiziell (nicht per Scraping) abgefragt werden koennen.
+serpapi_key: ""
+
+# Wie oft der eingebaute Scheduler automatisch neue Jobs sucht (in Minuten).
+# 0 = eingebauter Scheduler deaktiviert, dann per Cron/Taskplaner "python -m app.fetch_jobs" aufrufen.
+fetch_interval_minutes: 60
+
+# HTTP-Timeout und User-Agent fuer alle Scraper.
+http_timeout_seconds: 15
+user_agent: "Mozilla/5.0 (compatible; PersoenlicherJobBot/1.0; +privater Gebrauch)"

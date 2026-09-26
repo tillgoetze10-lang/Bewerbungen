@@ -1,0 +1,77 @@
+import hashlib
+from datetime import datetime, timezone
+
+from flask_sqlalchemy import SQLAlchemy
+
+db = SQLAlchemy()
+
+# Reihenfolge = Spaltenreihenfolge im Scrum-Board (links -> rechts).
+STATUS_FLOW = [
+    ("neu", "Neu"),
+    ("interessant", "Interessant"),
+    ("vorbereitung", "In Vorbereitung"),
+    ("beworben", "Beworben"),
+    ("rueckmeldung", "Rueckmeldung erhalten"),
+]
+STATUS_ARCHIVIERT = "archiviert"
+STATUS_KEYS = [key for key, _ in STATUS_FLOW]
+STATUS_LABELS = dict(STATUS_FLOW)
+STATUS_LABELS[STATUS_ARCHIVIERT] = "Archiv / Nicht interessant"
+
+
+def make_external_id(url: str) -> str:
+    return hashlib.sha256(url.strip().lower().encode("utf-8")).hexdigest()
+
+
+class Job(db.Model):
+    __tablename__ = "jobs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    external_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    title = db.Column(db.String(300), nullable=False)
+    company = db.Column(db.String(200))
+    location = db.Column(db.String(200))
+    url = db.Column(db.String(1000), nullable=False)
+    source = db.Column(db.String(50), nullable=False)
+    salary = db.Column(db.String(200))
+    description = db.Column(db.Text)
+    posted_at = db.Column(db.String(50))
+    fetched_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    status = db.Column(db.String(30), default="neu", index=True)
+    notes = db.Column(db.Text, default="")
+    cover_letter = db.Column(db.Text, default="")
+    updated_at = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    documents = db.relationship(
+        "JobDocument", backref="job", cascade="all, delete-orphan", lazy="dynamic"
+    )
+
+    def status_label(self):
+        return STATUS_LABELS.get(self.status, self.status)
+
+
+class Document(db.Model):
+    """Zentrale Dokumentenbibliothek (Lebenslauf, Anschreiben-Vorlagen, Zeugnisse, ...)."""
+
+    __tablename__ = "documents"
+
+    id = db.Column(db.Integer, primary_key=True)
+    doc_type = db.Column(db.String(50), nullable=False, default="sonstiges")
+    title = db.Column(db.String(200), nullable=False)
+    filename = db.Column(db.String(300), nullable=False)
+    stored_path = db.Column(db.String(500), nullable=False)
+    uploaded_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class JobDocument(db.Model):
+    """Verknuepfung: welches Dokument gehoert zu welcher Bewerbung."""
+
+    __tablename__ = "job_documents"
+
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.Integer, db.ForeignKey("jobs.id"), nullable=False)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False)
+
+    document = db.relationship("Document")
