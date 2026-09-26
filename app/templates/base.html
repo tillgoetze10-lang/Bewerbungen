@@ -10,16 +10,20 @@
 <body>
   <header class="topbar">
     <a class="brand" href="{{ url_for('board.board') }}">Bewerbungs-Board</a>
-    <nav>
-      <a href="{{ url_for('board.board') }}">Board</a>
-      <a href="{{ url_for('board.archive') }}">Archiv</a>
-      <a href="{{ url_for('board.documents') }}">Meine Unterlagen</a>
-      <a href="{{ url_for('board.companies') }}">Firmen</a>
-      <a href="{{ url_for('board.add_job') }}">+ Job hinzufuegen</a>
-      <form action="{{ url_for('board.fetch_now') }}" method="post" style="display:inline">
-        <button type="submit">Jetzt nach neuen Jobs suchen</button>
-      </form>
+
+    <nav class="nav-links">
+      <a href="{{ url_for('board.board') }}" class="{{ 'active' if request.endpoint == 'board.board' }}">Board</a>
+      <a href="{{ url_for('board.archive') }}" class="{{ 'active' if request.endpoint == 'board.archive' }}">Archiv</a>
+      <a href="{{ url_for('board.documents') }}" class="{{ 'active' if request.endpoint == 'board.documents' }}">Meine Unterlagen</a>
+      <a href="{{ url_for('board.companies') }}" class="{{ 'active' if request.endpoint == 'board.companies' }}">Firmen</a>
     </nav>
+
+    <div class="nav-actions">
+      <a class="btn-ghost" href="{{ url_for('board.add_job') }}">+ Job hinzufuegen</a>
+      <form action="{{ url_for('board.fetch_now') }}" method="post">
+        <button type="submit" class="btn-primary">Jetzt nach neuen Jobs suchen</button>
+      </form>
+    </div>
   </header>
 
   <main>

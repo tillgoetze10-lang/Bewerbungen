@@ -16,6 +16,11 @@ Ab dann reicht fuer jeden weiteren Start wirklich nur noch: **Doppelklick
 auf `start.command`.** Zum Beenden einfach das Terminal-Fenster schliessen,
 das sich dabei oeffnet.
 
+`start.command` holt sich bei jedem Start automatisch den neuesten Stand aus
+Git (`git pull --ff-only`), bevor die App laeuft - du musst also nicht
+selbst an Updates denken. Klappt der Pull mal nicht (z.B. offline), startet
+es einfach mit dem vorhandenen Stand weiter, statt abzubrechen.
+
 (Der Rest dieser README beschreibt den manuellen Weg per Terminal - nuetzlich
 zum Verstehen, was im Hintergrund passiert, oder falls du z.B. auf Windows/Linux
 oder einem Server ohne Doppelklick arbeitest.)

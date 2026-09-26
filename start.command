@@ -1,10 +1,22 @@
 #!/bin/bash
 # Doppelklick-Start fuer macOS: im Finder auf start.command doppelklicken.
-# Beim allerersten Mal richtet das Skript automatisch alles ein
-# (virtuelle Umgebung, Abhaengigkeiten, config.yaml) und startet danach
-# die App - der Browser oeffnet sich von selbst.
-set -e
+# Holt bei jedem Start automatisch den neuesten Stand aus Git (Auto-Update),
+# richtet beim allerersten Mal alles ein (venv, Abhaengigkeiten, config.yaml)
+# und startet danach die App - der Browser oeffnet sich von selbst.
 cd "$(dirname "$0")"
+
+if [ -d ".git" ]; then
+  echo "Suche nach Updates..."
+  if git pull --ff-only 2>&1; then
+    echo "Auf dem neuesten Stand."
+  else
+    echo "Update fehlgeschlagen (z.B. offline oder lokale Aenderungen im Weg) -"
+    echo "starte mit dem vorhandenen Stand weiter."
+  fi
+  echo ""
+fi
+
+set -e
 
 if [ ! -d ".venv" ]; then
   echo "Erstmaliges Setup: virtuelle Umgebung wird angelegt..."
