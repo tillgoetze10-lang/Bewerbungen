@@ -38,6 +38,27 @@ oder einem Server ohne Doppelklick arbeitest.)
 - **Automatische Ersteinschaetzung:** jeder gefundene Job wird direkt nach Berufsbild + Standort-Strategie bewertet (Top-Treffer / Pruefen / Eher unpassend) - siehe naechster Abschnitt.
 - **Automatische Detail-Extraktion:** Ansprechpartner (Name/E-Mail/Telefon), Firmen-Website, Voraussetzungen und geforderte Bewerbungsunterlagen werden direkt aus der Anzeige gezogen - inkl. ehrlicher Anzeige, was NICHT gefunden wurde (siehe naechster Abschnitt).
 - **Drag & Drop:** Karten lassen sich im Board direkt zwischen den Spalten verschieben (per Maus), alternativ geht's weiterhin per Dropdown auf der Karte.
+- **Status-Seite (`/status`):** protokolliert dauerhaft, ob jede Quelle beim letzten Lauf funktioniert hat oder nicht - siehe naechster Abschnitt.
+
+## Status-Seite: musst du nicht selbst Fehler verstehen
+
+`/status` zeigt fuer jede Quelle (Portale + jede hinterlegte Firma) den
+letzten Lauf: **OK** oder **Fehler** + Klartext-Grund + Zeitpunkt. Das wird
+bei jedem Fetch-Lauf in der Datenbank protokolliert (`ScraperRun` in
+`app/models.py`), nicht nur fluechtig als Flash-Meldung direkt nach dem
+Klick - du kannst also auch Tage spaeter noch nachschauen.
+
+**Falls etwas kaputt ist, musst du die Meldung nicht selbst verstehen:**
+auf `/status` gibt es einen Button "Text kopieren", der eine fertige
+Diagnose aller Quellen erzeugt. Den einfach in den Chat mit Claude
+einfuegen - Claude repariert dann den betroffenen Scraper (z.B. wenn eine
+Jobboerse ihr Seitenlayout geaendert hat oder neuen Bot-Schutz aktiviert
+hat).
+
+Wichtig zu wissen: Claude kann nicht dauerhaft auf deinem Rechner
+mitlaufen oder von selbst merken, wenn eine Quelle kaputt geht - dafuer
+braucht es einen kurzen Check von dir (z.B. einmal pro Woche `/status`
+oeffnen) und die Diagnose in den Chat kopieren.
 
 ## Automatische Detail-Extraktion (Ansprechpartner, Voraussetzungen, Unterlagen)
 

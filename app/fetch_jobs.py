@@ -3,6 +3,11 @@ fuer alle konfigurierten Suchprofile und legt neue, passende Jobs im Status
 'neu' an (bereits bekannte URLs werden uebersprungen). Jeder neue Job wird
 sofort automatisch bewertet (siehe app/matching.py).
 
+Jeder Quellen-Versuch wird zusaetzlich als ScraperRun protokolliert (siehe
+app/models.py) - das treibt die Status-Seite (/status), damit du nicht
+selbst Terminal-Logs oder Flash-Meldungen lesen musst, um zu sehen, ob
+eine Quelle gerade funktioniert.
+
 Aufruf manuell:      python -m app.fetch_jobs
 Aufruf automatisch:  siehe app/scheduler.py (laeuft im Hintergrund der Web-App)
 Aufruf per Klick:    Button "Jetzt nach neuen Jobs suchen" im Web-UI
@@ -14,12 +19,14 @@ import sys
 from .config import load_config, source_enabled
 from .extraction import EMPTY_RESULT, fetch_and_extract_details
 from .matching import score_job, score_title
-from .models import CompanySource, Job, db, make_external_id
+from .models import CompanySource, Job, ScraperRun, db, make_external_id
 from .scrapers import REGISTRY
 from .scrapers.base import ScraperError
 from .scrapers.company_generic import search_company
 
 logger = logging.getLogger(__name__)
+
+RUNS_KEPT_PER_SOURCE = 20
 
 
 def _store_listing(listing, config) -> bool:
@@ -70,6 +77,20 @@ def _store_listing(listing, config) -> bool:
     return True
 
 
+def _record_run(source: str, ok: bool, message: str, new_jobs: int):
+    db.session.add(ScraperRun(source=source, ok=ok, message=message[:2000], new_jobs=new_jobs))
+    # Alte Eintraege derselben Quelle aufraeumen, damit die Tabelle nicht endlos waechst.
+    old_ids = [
+        r.id
+        for r in ScraperRun.query.filter_by(source=source)
+        .order_by(ScraperRun.ran_at.desc())
+        .offset(RUNS_KEPT_PER_SOURCE)
+        .all()
+    ]
+    if old_ids:
+        ScraperRun.query.filter(ScraperRun.id.in_(old_ids)).delete(synchronize_session=False)
+
+
 def run_fetch_cycle(app):
     """Fuehrt einen kompletten Scraper-Durchlauf aus. Muss im Flask app_context laufen."""
     config = load_config()
@@ -85,34 +106,46 @@ def run_fetch_cycle(app):
             for source_name, scraper in REGISTRY.items():
                 if not source_enabled(config, source_name):
                     continue
+
+                source_new_jobs = 0
+                source_errors = []
                 for profile in profiles:
                     try:
                         listings = scraper.search(profile, config)
                     except ScraperError as exc:
                         logger.warning("[%s] %s", source_name, exc)
-                        errors.append(f"{source_name}: {exc}")
+                        source_errors.append(str(exc))
                         continue
                     except Exception as exc:  # ein kaputter Scraper darf den Lauf nicht stoppen
                         logger.exception("[%s] unerwarteter Fehler", source_name)
-                        errors.append(f"{source_name}: unerwarteter Fehler ({exc})")
+                        source_errors.append(f"unerwarteter Fehler ({exc})")
                         continue
 
                     for listing in listings:
                         if _store_listing(listing, config):
-                            new_jobs += 1
+                            source_new_jobs += 1
+
+                ok = not source_errors
+                message = "; ".join(source_errors) if source_errors else f"{source_new_jobs} neue Job(s)."
+                _record_run(source_name, ok, message, source_new_jobs)
+                new_jobs += source_new_jobs
+                errors.extend(f"{source_name}: {e}" for e in source_errors)
 
         for company in CompanySource.query.filter_by(active=True).all():
+            source_key = f"firma:{company.name}"
             try:
                 listings = search_company(company.name, company.career_url, config)
             except ScraperError as exc:
-                logger.warning("[firma:%s] %s", company.name, exc)
+                logger.warning("[%s] %s", source_key, exc)
                 errors.append(f"{company.name}: {exc}")
                 company.last_result = f"Fehler: {exc}"[:290]
+                _record_run(source_key, False, str(exc), 0)
                 continue
             except Exception as exc:
-                logger.exception("[firma:%s] unerwarteter Fehler", company.name)
+                logger.exception("[%s] unerwarteter Fehler", source_key)
                 errors.append(f"{company.name}: unerwarteter Fehler ({exc})")
                 company.last_result = f"Unerwarteter Fehler: {exc}"[:290]
+                _record_run(source_key, False, f"unerwarteter Fehler ({exc})", 0)
                 continue
 
             found = 0
@@ -121,6 +154,7 @@ def run_fetch_cycle(app):
                     found += 1
                     new_jobs += 1
             company.last_result = f"{len(listings)} passende Treffer, {found} davon neu."
+            _record_run(source_key, True, company.last_result, found)
 
         db.session.commit()
 

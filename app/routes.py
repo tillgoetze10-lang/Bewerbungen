@@ -26,6 +26,7 @@ from .models import (
     Document,
     Job,
     JobDocument,
+    ScraperRun,
     db,
     make_external_id,
 )
@@ -366,3 +367,39 @@ def fetch_now():
     for err in result["errors"]:
         flash(err, "error")
     return redirect(url_for("board.board"))
+
+
+# ---- Status: dauerhaftes Protokoll statt fluechtiger Flash-Meldungen ----
+
+
+def _latest_run_per_source():
+    """Neuester ScraperRun je Quelle, neueste zuerst nach Quellenname sortiert."""
+    latest = {}
+    for run in ScraperRun.query.order_by(ScraperRun.ran_at.desc()).all():
+        if run.source not in latest:
+            latest[run.source] = run
+    return dict(sorted(latest.items()))
+
+
+@bp.route("/status")
+def status():
+    latest = _latest_run_per_source()
+    broken = [s for s, r in latest.items() if not r.ok]
+    return render_template("status.html", latest=latest, broken=broken)
+
+
+@bp.route("/status/text")
+def status_text():
+    """Reiner Text-Dump zum Kopieren - schick das einfach 1:1 weiter, wenn
+    eine Quelle nicht funktioniert, dann muss niemand die Meldungen selbst
+    verstehen."""
+    lines = ["Bewerbungs-Board - Quellen-Status", "=" * 34, ""]
+    latest = _latest_run_per_source()
+    if not latest:
+        lines.append("Noch kein Fetch-Lauf protokolliert. Einmal 'Jetzt nach neuen Jobs suchen' klicken.")
+    for source, run in latest.items():
+        state = "OK" if run.ok else "FEHLER"
+        lines.append(f"[{state}] {source} - zuletzt {run.ran_at.strftime('%Y-%m-%d %H:%M UTC')}")
+        lines.append(f"    {run.message}")
+        lines.append("")
+    return "\n".join(lines), 200, {"Content-Type": "text/plain; charset=utf-8"}

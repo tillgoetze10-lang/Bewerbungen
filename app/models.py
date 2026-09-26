@@ -122,3 +122,21 @@ class CompanySource(db.Model):
     active = db.Column(db.Boolean, default=True)
     added_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_result = db.Column(db.String(300), default="")
+
+
+class ScraperRun(db.Model):
+    """Protokoll jedes Quellen-Abrufs (Portal oder Firma) bei jedem Fetch-Lauf.
+
+    Zweck: der Nutzer soll NICHT selbst Terminal-Logs oder fluechtige
+    Flash-Meldungen lesen/verstehen muessen. Stattdessen zeigt die
+    Status-Seite (/status) einfach "funktioniert" / "kaputt seit wann,
+    warum" pro Quelle - dauerhaft, nicht nur direkt nach dem Klick."""
+
+    __tablename__ = "scraper_runs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ran_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    source = db.Column(db.String(100), nullable=False, index=True)
+    ok = db.Column(db.Boolean, default=True)
+    message = db.Column(db.Text, default="")
+    new_jobs = db.Column(db.Integer, default=0)
