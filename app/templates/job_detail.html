@@ -11,6 +11,11 @@
 </p>
 <p><a href="{{ job.url }}" target="_blank" rel="noopener">Original-Anzeige oeffnen</a></p>
 
+<div class="match-box badge-{{ job.match_label }}">
+  <strong>Automatische Einschaetzung: {{ job.match_label_text() }} ({{ (job.match_score * 100)|round|int }}%)</strong>
+  <p>{{ job.match_reason }}</p>
+</div>
+
 <form action="{{ url_for('board.update_status', job_id=job.id) }}" method="post" class="inline-form">
   <input type="hidden" name="next" value="{{ url_for('board.job_detail', job_id=job.id) }}">
   <label>Status:

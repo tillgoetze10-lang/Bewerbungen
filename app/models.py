@@ -44,12 +44,23 @@ class Job(db.Model):
         db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
+    # Automatische Ersteinschaetzung (siehe app/matching.py) - nur eine Empfehlung,
+    # loescht/versteckt nichts von selbst.
+    match_score = db.Column(db.Float, default=0.0, index=True)
+    match_label = db.Column(db.String(20), default="pruefen")
+    match_reason = db.Column(db.Text, default="")
+
     documents = db.relationship(
         "JobDocument", backref="job", cascade="all, delete-orphan", lazy="dynamic"
     )
 
     def status_label(self):
         return STATUS_LABELS.get(self.status, self.status)
+
+    def match_label_text(self):
+        from .matching import LABEL_TEXT
+
+        return LABEL_TEXT.get(self.match_label, self.match_label)
 
 
 class Document(db.Model):
@@ -75,3 +86,17 @@ class JobDocument(db.Model):
     document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False)
 
     document = db.relationship("Document")
+
+
+class CompanySource(db.Model):
+    """Von dir hinterlegte Firmen-Karriereseiten, die beim Fetch-Lauf mit
+    durchsucht werden (zusaetzlich zu den Jobportalen)."""
+
+    __tablename__ = "company_sources"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    career_url = db.Column(db.String(1000), nullable=False)
+    active = db.Column(db.Boolean, default=True)
+    added_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_result = db.Column(db.String(300), default="")

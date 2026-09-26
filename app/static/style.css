@@ -67,6 +67,25 @@ button.small { padding: 0.15rem 0.4rem; font-size: 0.75rem; }
 .flash-error { background: #ffebe6; color: #bf2600; }
 .flash-info { background: #deebff; color: #0747a6; }
 
+.badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  margin-bottom: 0.35rem;
+  cursor: help;
+}
+.badge-top { background: #e3fcef; color: #006644; }
+.badge-pruefen { background: #fffae6; color: #974f0c; }
+.badge-unpassend { background: #ffebe6; color: #bf2600; }
+
+.match-box { border-radius: 6px; padding: 0.75rem 1rem; margin: 1rem 0; }
+.match-box.badge-top { background: #e3fcef; }
+.match-box.badge-pruefen { background: #fffae6; }
+.match-box.badge-unpassend { background: #ffebe6; }
+.match-box p { margin: 0.3rem 0 0; font-size: 0.9rem; }
+
 .empty { color: #97a0af; font-style: italic; }
 .hint { color: #5e6c84; font-size: 0.85rem; }
 .description { white-space: pre-wrap; background: white; padding: 0.75rem; border-radius: 4px; }

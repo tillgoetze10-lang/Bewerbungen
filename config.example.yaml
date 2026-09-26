@@ -4,12 +4,18 @@
 # Suchprofile: eine oder mehrere Kombinationen aus Suchbegriff + Ort.
 # Jedes Profil wird bei jedem Scraper-Lauf gegen jede aktivierte Quelle geprueft.
 search_profiles:
-  - keywords: "Softwareentwickler"
-    location: "Berlin"
+  - keywords: "Videograf"
+    location: "Köln"
     radius_km: 30
-  - keywords: "Projektleiter Film"
-    location: "Muenchen"
-    radius_km: 50
+  - keywords: "Video Editor"
+    location: "Köln"
+    radius_km: 30
+  - keywords: "Mediengestalter Bild und Ton"
+    location: "Köln"
+    radius_km: 30
+  - keywords: "Video Producer"
+    location: "Frankfurt am Main"
+    radius_km: 30
 
 # Quellen einzeln an-/abschalten. Siehe README fuer rechtliche Hinweise
 # (LinkedIn wird bewusst NICHT automatisiert durchsucht, siehe app/scrapers/linkedin.py).

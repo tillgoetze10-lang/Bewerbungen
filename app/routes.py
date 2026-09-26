@@ -14,10 +14,12 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from .fetch_jobs import run_fetch_cycle
+from .matching import score_job
 from .models import (
     STATUS_ARCHIVIERT,
     STATUS_FLOW,
     STATUS_KEYS,
+    CompanySource,
     Document,
     Job,
     JobDocument,
@@ -34,7 +36,11 @@ bp = Blueprint("board", __name__)
 def board():
     columns = []
     for key, label in STATUS_FLOW:
-        jobs = Job.query.filter_by(status=key).order_by(Job.fetched_at.desc()).all()
+        jobs = (
+            Job.query.filter_by(status=key)
+            .order_by(Job.match_score.desc(), Job.fetched_at.desc())
+            .all()
+        )
         columns.append({"key": key, "label": label, "jobs": jobs})
     archived_count = Job.query.filter_by(status=STATUS_ARCHIVIERT).count()
     return render_template("board.html", columns=columns, archived_count=archived_count)
@@ -207,6 +213,7 @@ def add_job():
             flash("Dieser Job ist schon im Board.", "info")
             return redirect(url_for("board.job_detail", job_id=existing.id))
 
+        score, label, reason = score_job(listing.title, listing.description, listing.location)
         job = Job(
             external_id=ext_id,
             title=listing.title,
@@ -218,6 +225,9 @@ def add_job():
             description=listing.description,
             posted_at=listing.posted_at,
             status="neu",
+            match_score=score,
+            match_label=label,
+            match_reason=reason,
         )
         db.session.add(job)
         db.session.commit()
@@ -231,22 +241,67 @@ def add_job():
         flash("Bitte mindestens einen Titel angeben.", "error")
         return redirect(url_for("board.add_job"))
 
+    description = request.form.get("description", "")
+    location = request.form.get("location", "")
+    score, label, reason = score_job(title, description, location)
+
     ext_id = make_external_id(url)
     job = Job(
         external_id=ext_id,
         title=title,
         company=request.form.get("company", ""),
-        location=request.form.get("location", ""),
+        location=location,
         url=url,
         source="manuell",
         salary=request.form.get("salary", ""),
-        description=request.form.get("description", ""),
+        description=description,
         status="neu",
+        match_score=score,
+        match_label=label,
+        match_reason=reason,
     )
     db.session.add(job)
     db.session.commit()
     flash("Job hinzugefuegt.", "success")
     return redirect(url_for("board.job_detail", job_id=job.id))
+
+
+# ---- Firmen-Karriereseiten ----
+
+
+@bp.route("/firmen")
+def companies():
+    sources = CompanySource.query.order_by(CompanySource.name).all()
+    return render_template("companies.html", sources=sources)
+
+
+@bp.route("/firmen/hinzufuegen", methods=["POST"])
+def add_company():
+    name = request.form.get("name", "").strip()
+    url = request.form.get("career_url", "").strip()
+    if not name or not url:
+        flash("Bitte Firmenname und Link zur Karriereseite angeben.", "error")
+        return redirect(url_for("board.companies"))
+    db.session.add(CompanySource(name=name, career_url=url, active=True))
+    db.session.commit()
+    flash(f"{name} hinzugefuegt. Wird beim naechsten Fetch-Lauf mit durchsucht.", "success")
+    return redirect(url_for("board.companies"))
+
+
+@bp.route("/firmen/<int:source_id>/toggle", methods=["POST"])
+def toggle_company(source_id):
+    source = CompanySource.query.get_or_404(source_id)
+    source.active = not source.active
+    db.session.commit()
+    return redirect(url_for("board.companies"))
+
+
+@bp.route("/firmen/<int:source_id>/delete", methods=["POST"])
+def delete_company(source_id):
+    source = CompanySource.query.get_or_404(source_id)
+    db.session.delete(source)
+    db.session.commit()
+    return redirect(url_for("board.companies"))
 
 
 # ---- Manuellen Scraper-Lauf anstossen ----

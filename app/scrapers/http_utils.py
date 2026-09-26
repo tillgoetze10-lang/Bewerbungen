@@ -1,11 +1,56 @@
+import urllib.robotparser
+from urllib.parse import urlparse
+
 import requests
 
 from .base import ScraperError
 
+_robots_cache = {}
 
-def get(url: str, config: dict, params: dict = None) -> str:
-    headers = {"User-Agent": config.get("user_agent", "Mozilla/5.0")}
+
+def _robots_allowed(url: str, user_agent: str) -> bool:
+    """Prueft robots.txt der Zielseite, bevor automatisiert zugegriffen wird.
+    Ergebnis wird pro Host gecacht, damit robots.txt nicht bei jedem Request
+    neu geladen wird. Kann robots.txt selbst nicht geladen werden, wird das
+    NICHT als Verbot gewertet (viele Seiten haben schlicht keine robots.txt)."""
+    parsed = urlparse(url)
+    host = f"{parsed.scheme}://{parsed.netloc}"
+    if host not in _robots_cache:
+        rp = urllib.robotparser.RobotFileParser()
+        rp.set_url(f"{host}/robots.txt")
+        try:
+            rp.read()
+        except Exception:
+            rp = None  # robots.txt nicht erreichbar/nicht vorhanden -> nicht blockieren
+        _robots_cache[host] = rp
+
+    rp = _robots_cache[host]
+    if rp is None:
+        return True
+    return rp.can_fetch(user_agent, url)
+
+
+def get(url: str, config: dict, params: dict = None, respect_robots: bool = True) -> str:
+    """respect_robots=False ist nur fuer den Einzel-Import per Link (quick_add.py)
+    gedacht: dort ruft der Nutzer explizit genau eine Seite ab, die er sich selbst
+    ausgesucht hat - das ist kein automatisiertes Crawling, an das sich robots.txt
+    richtet. Alle Massenabfragen (Suchergebnisseiten, Firmen-Karriereseiten)
+    respektieren robots.txt immer."""
+    user_agent = config.get("user_agent", "Mozilla/5.0")
+    headers = {"User-Agent": user_agent}
     timeout = config.get("http_timeout_seconds", 15)
+
+    check_url = url
+    if params:
+        check_url = requests.Request("GET", url, params=params).prepare().url
+
+    if respect_robots and not _robots_allowed(check_url, user_agent):
+        raise ScraperError(
+            f"robots.txt von {urlparse(url).netloc} untersagt automatisierten Zugriff auf diese "
+            "Seite fuer unseren User-Agent - wird uebersprungen. Bitte den Job stattdessen per "
+            "'Schnell hinzufuegen (Link)' eintragen."
+        )
+
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=timeout)
     except requests.RequestException as exc:

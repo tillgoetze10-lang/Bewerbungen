@@ -8,6 +8,7 @@
     <div class="cards">
       {% for job in column.jobs %}
       <article class="card">
+        <span class="badge badge-{{ job.match_label }}" title="{{ job.match_reason }}">{{ job.match_label_text() }} &middot; {{ (job.match_score * 100)|round|int }}%</span>
         <a class="card-title" href="{{ url_for('board.job_detail', job_id=job.id) }}">{{ job.title }}</a>
         <div class="card-meta">
           {{ job.company or "Unbekannte Firma" }}{% if job.location %} &middot; {{ job.location }}{% endif %}

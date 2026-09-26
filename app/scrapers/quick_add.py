@@ -12,7 +12,9 @@ from .jsonld import extract_jobpostings
 
 
 def fetch_from_url(url: str, config: dict) -> JobListing:
-    html = get(url, config)
+    # respect_robots=False: das ist ein einzelner, vom Nutzer ausgeloester Abruf
+    # genau einer selbst ausgewaehlten Seite (siehe http_utils.get), kein Crawling.
+    html = get(url, config, respect_robots=False)
 
     listings = extract_jobpostings(html, source=_guess_source(url), fallback_url=url)
     if listings:
