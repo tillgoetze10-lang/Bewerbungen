@@ -21,7 +21,7 @@
 
     <div class="nav-actions">
       <a class="btn-ghost" href="{{ url_for('board.add_job') }}">+ Job hinzufuegen</a>
-      <form action="{{ url_for('board.fetch_now') }}" method="post">
+      <form action="{{ url_for('board.fetch_now') }}" method="post" onsubmit="return startFetchNow(this)">
         <button type="submit" class="btn-primary">Jetzt nach neuen Jobs suchen</button>
       </form>
     </div>
@@ -51,6 +51,17 @@
   </main>
 
   <script>
+    // Sichtbares Feedback beim Klick auf "Jetzt nach neuen Jobs suchen":
+    // der Lauf kann je nach Anzahl Quellen/Suchprofilen und Detail-Extraktion
+    // durchaus 30s-mehrere Minuten dauern - ohne diese Rueckmeldung sieht das
+    // aus wie "nichts passiert", obwohl im Hintergrund gesucht wird.
+    function startFetchNow(form) {
+      const btn = form.querySelector("button");
+      btn.disabled = true;
+      btn.textContent = "Suche läuft... (kann etwas dauern)";
+      return true; // Formular ganz normal absenden lassen
+    }
+
     // Auf jeder Seite verfuegbar (Warn-Banner oben + Status-Seite): holt den
     // Klartext-Diagnosebericht und legt ihn direkt in die Zwischenablage -
     // danach reicht Einfuegen (Cmd+V) im Chat mit Claude.

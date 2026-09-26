@@ -7,21 +7,40 @@ from .base import ScraperError
 
 _robots_cache = {}
 
+# Bewusst kurz und unabhaengig von http_timeout_seconds: robots.txt ist ein
+# Vorab-Check, der schnell durchlaufen soll. WICHTIG: RobotFileParser.read()
+# (aus der Python-Standardbibliothek) nutzt urllib OHNE Timeout - eine Seite,
+# die beim robots.txt-Abruf gar nicht oder sehr langsam antwortet, wuerde den
+# kompletten Request sonst unbegrenzt haengen lassen (so als wuerde beim
+# Klick auf "Jetzt nach neuen Jobs suchen" ueberhaupt nichts passieren).
+# Deshalb holen wir robots.txt selbst per requests (mit Timeout) und fuettern
+# den Text an RobotFileParser.parse() statt .read() zu benutzen.
+_ROBOTS_TIMEOUT_SECONDS = 6
+
 
 def _robots_allowed(url: str, user_agent: str) -> bool:
     """Prueft robots.txt der Zielseite, bevor automatisiert zugegriffen wird.
     Ergebnis wird pro Host gecacht, damit robots.txt nicht bei jedem Request
-    neu geladen wird. Kann robots.txt selbst nicht geladen werden, wird das
-    NICHT als Verbot gewertet (viele Seiten haben schlicht keine robots.txt)."""
+    neu geladen wird. Kann robots.txt selbst nicht geladen werden (nicht
+    vorhanden, Timeout, Fehler), wird das NICHT als Verbot gewertet - viele
+    Seiten haben schlicht keine robots.txt, und ein haengender Abruf darf
+    die App nicht blockieren."""
     parsed = urlparse(url)
     host = f"{parsed.scheme}://{parsed.netloc}"
     if host not in _robots_cache:
         rp = urllib.robotparser.RobotFileParser()
-        rp.set_url(f"{host}/robots.txt")
         try:
-            rp.read()
-        except Exception:
-            rp = None  # robots.txt nicht erreichbar/nicht vorhanden -> nicht blockieren
+            resp = requests.get(
+                f"{host}/robots.txt",
+                headers={"User-Agent": user_agent},
+                timeout=_ROBOTS_TIMEOUT_SECONDS,
+            )
+            if resp.status_code >= 400:
+                rp = None
+            else:
+                rp.parse(resp.text.splitlines())
+        except requests.RequestException:
+            rp = None  # robots.txt nicht erreichbar/Timeout -> nicht blockieren
         _robots_cache[host] = rp
 
     rp = _robots_cache[host]
