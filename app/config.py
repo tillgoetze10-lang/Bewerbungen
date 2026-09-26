@@ -1,3 +1,10 @@
+"""Technische Einstellungen aus config.yaml (optional).
+
+Suchprofile und Quellen-Schalter werden im UI unter "Einstellungen" gepflegt
+(Datenbank). config.yaml wird nur noch fuer technische Dinge gebraucht und
+beim allerersten Start einmal als Vorlage fuer die Suchprofile gelesen.
+"""
+
 import os
 
 import yaml
@@ -11,19 +18,22 @@ DEFAULTS = {
     "sources": {},
     "serpapi_key": "",
     "fetch_interval_minutes": 60,
+    "fetch_on_startup": True,
+    "fetch_job_details": True,
     "http_timeout_seconds": 15,
-    "user_agent": "Mozilla/5.0 (compatible; PersoenlicherJobBot/1.0; +privater Gebrauch)",
+    "user_agent": "Mozilla/5.0 (compatible; PersoenlicherJobBot/1.0; privater Gebrauch)",
 }
 
 
 def load_config():
     path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else EXAMPLE_CONFIG_PATH
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
     merged = dict(DEFAULTS)
-    merged.update(data)
+    if isinstance(data, dict):
+        merged.update({k: v for k, v in data.items() if v is not None})
     return merged
-
-
-def source_enabled(config, name):
-    return bool(config.get("sources", {}).get(name, {}).get("enabled", False))

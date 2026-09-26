@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -13,14 +13,23 @@ class JobListing:
     salary: str = ""
     description: str = ""
     posted_at: str = ""
+    ref: str = ""  # quellen-interne ID (z.B. Referenznummer der Arbeitsagentur)
 
     def is_valid(self) -> bool:
-        return bool(self.title and self.url)
+        return bool(self.title and self.url and self.url.lower().startswith(("http://", "https://")))
 
 
 class ScraperError(Exception):
-    """Wird geworfen, wenn eine Quelle nicht abgefragt werden konnte (Block, Timeout, ...).
+    """Eine Quelle konnte nicht abgefragt werden.
 
-    fetch_jobs.py faengt das ab, loggt eine Warnung und macht mit den anderen
-    Quellen weiter, statt den ganzen Lauf abzubrechen.
+    kind:
+      "blocked" - die Seite laesst automatische Abfragen nicht zu (Bot-Schutz,
+                  robots.txt, JavaScript-only). Kein Bug; umgehen waere weder
+                  sauber noch rechtlich sinnvoll -> Link-Import nutzen.
+      "error"   - echter Fehler (Netzwerk, Layout geaendert, Bug) -> Claude fixen lassen.
+      "config"  - Einstellung fehlt (z.B. API-Key).
     """
+
+    def __init__(self, message: str, kind: str = "error"):
+        super().__init__(message)
+        self.kind = kind

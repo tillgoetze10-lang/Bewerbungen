@@ -1,25 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Archiv{% endblock %}
 {% block content %}
-<h1>Archiv / Nicht interessant</h1>
-<div class="cards">
+<h1>Archiv</h1>
+<p class="hint">Hier landet alles, was du im Board „gelöscht“ hast. Du kannst es zurückholen oder endgültig entfernen.</p>
+<div class="archive-list">
   {% for job in jobs %}
-  <article class="card">
+  <article class="card static">
     <a class="card-title" href="{{ url_for('board.job_detail', job_id=job.id) }}">{{ job.title }}</a>
-    <div class="card-meta">{{ job.company or "Unbekannte Firma" }}{% if job.location %} &middot; {{ job.location }}{% endif %}</div>
+    <div class="card-meta">{{ job.company or "Firma unbekannt" }}{% if job.location %} · {{ job.location }}{% endif %} · {{ job.source|source_label }}</div>
     <div class="card-actions">
       <form action="{{ url_for('board.update_status', job_id=job.id) }}" method="post" class="inline-form">
         <input type="hidden" name="status" value="neu">
         <input type="hidden" name="next" value="{{ url_for('board.archive') }}">
-        <button type="submit">Wiederherstellen</button>
+        <button type="submit" class="ghost small">Zurück ins Board</button>
       </form>
-      <form action="{{ url_for('board.purge_job', job_id=job.id) }}" method="post" class="inline-form">
-        <button type="submit" class="danger">Endgueltig loeschen</button>
+      <form action="{{ url_for('board.purge_job', job_id=job.id) }}" method="post" class="inline-form" onsubmit="return confirm('Wirklich endgültig löschen? Anschreiben und Notizen gehen dabei verloren.')">
+        <button type="submit" class="danger small">Endgültig löschen</button>
       </form>
     </div>
   </article>
   {% else %}
-  <p class="empty">Archiv ist leer.</p>
+  <p class="empty">Das Archiv ist leer.</p>
   {% endfor %}
 </div>
 {% endblock %}

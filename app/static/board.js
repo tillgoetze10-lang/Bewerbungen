@@ -1,79 +1,79 @@
-// Drag & Drop fuer das Kanban-Board. Faellt auf die normale <select> +
-// Formular-Loesung zurueck (schon im HTML vorhanden), falls JS mal aus ist
-// oder ein Request fehlschlaegt.
+// Drag & Drop fuer das Board. Faellt auf das Dropdown auf jeder Karte zurueck,
+// wenn ein Request fehlschlaegt.
 (function () {
   let dragged = null;
+  let origin = null;
+
+  function updateColumn(column) {
+    const visible = column.querySelectorAll(":scope > .cards > .card").length;
+    const badge = column.querySelector(".count");
+    if (badge) badge.textContent = visible;
+    const empty = column.querySelector(":scope > .cards > .empty");
+    if (empty) empty.classList.toggle("hidden", visible > 0);
+  }
+
+  function updateAll() {
+    document.querySelectorAll(".column").forEach(updateColumn);
+  }
 
   document.querySelectorAll(".card").forEach((card) => {
     card.addEventListener("dragstart", (e) => {
       dragged = card;
+      origin = card.parentElement;
       card.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", card.dataset.jobId);
     });
     card.addEventListener("dragend", () => {
       card.classList.remove("dragging");
-      dragged = null;
+      document.querySelectorAll(".cards.drag-over").forEach((c) => c.classList.remove("drag-over"));
     });
   });
 
-  document.querySelectorAll(".cards").forEach((columnEl) => {
-    columnEl.addEventListener("dragover", (e) => {
+  document.querySelectorAll(".column > .cards").forEach((target) => {
+    target.addEventListener("dragover", (e) => {
       e.preventDefault();
-      columnEl.classList.add("drag-over");
+      target.classList.add("drag-over");
     });
-    columnEl.addEventListener("dragleave", () => {
-      columnEl.classList.remove("drag-over");
+    target.addEventListener("dragleave", (e) => {
+      if (!target.contains(e.relatedTarget)) target.classList.remove("drag-over");
     });
-    columnEl.addEventListener("drop", (e) => {
+    target.addEventListener("drop", (e) => {
       e.preventDefault();
-      columnEl.classList.remove("drag-over");
-      if (!dragged) return;
+      target.classList.remove("drag-over");
+      if (!dragged || target === origin) return;
 
-      const fromColumn = dragged.closest(".cards");
-      const newStatus = columnEl.dataset.status;
-      const jobId = dragged.dataset.jobId;
-
-      // Leere-Spalte-Hinweis entfernen, Karte optimistisch verschieben.
-      const emptyHint = columnEl.querySelector(".empty");
-      if (emptyHint) emptyHint.remove();
-      columnEl.appendChild(dragged);
-      updateCounts();
-
-      // Status im Formular der Karte mitziehen, falls JS-Aufruf fehlschlaegt
-      // und die Seite neu geladen wird, bleibt die Auswahl konsistent.
-      const select = dragged.querySelector("select[name=status]");
+      const card = dragged;
+      const from = origin;
+      const newStatus = target.dataset.status;
+      target.insertBefore(card, target.querySelector(".empty"));
+      const select = card.querySelector("select[name=status]");
       if (select) select.value = newStatus;
+      updateAll();
 
-      fetch(`/job/${jobId}/status`, {
+      fetch(`/job/${card.dataset.jobId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
       })
         .then((r) => r.json())
-        .then((data) => {
-          if (!data.ok && fromColumn) {
-            // Server hat abgelehnt -> Karte zurueckschieben.
-            fromColumn.appendChild(dragged);
-            updateCounts();
-          }
-        })
+        .then((data) => { if (!data.ok) throw new Error("abgelehnt"); })
         .catch(() => {
-          // Netzwerkfehler: sicherheitshalber zurueckschieben und den
-          // Nutzer nicht im Unklaren lassen.
-          if (fromColumn) {
-            fromColumn.appendChild(dragged);
-            updateCounts();
-          }
-          alert("Verschieben fehlgeschlagen (Netzwerk). Bitte per Dropdown auf der Karte versuchen.");
+          from.insertBefore(card, from.querySelector(".empty"));
+          updateAll();
+          alert("Verschieben hat nicht geklappt. Bitte das Auswahlfeld auf der Karte benutzen.");
         });
     });
   });
 
-  function updateCounts() {
-    document.querySelectorAll(".column").forEach((col) => {
-      const count = col.querySelector(".cards").children.length;
-      const badge = col.querySelector(".count");
-      if (badge) badge.textContent = count;
+  // "Löschen" ohne Seiten-Neuladen: Karte ausblenden, Archiv-Zaehler bleibt beim naechsten Laden aktuell.
+  document.querySelectorAll("form.js-archive").forEach((form) => {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const card = form.closest(".card");
+      fetch(form.action, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+        .then((r) => { if (!r.ok) throw new Error(); card.classList.add("removing"); setTimeout(() => { card.remove(); updateAll(); }, 180); })
+        .catch(() => form.submit());
     });
-  }
+  });
 })();

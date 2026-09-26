@@ -1,53 +1,64 @@
 import os
+import subprocess
 import uuid
+from urllib.parse import urlparse
 
 from flask import (
-    Blueprint,
-    current_app,
-    flash,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    send_from_directory,
-    url_for,
+    Blueprint, current_app, flash, jsonify, redirect, render_template, request, send_from_directory, url_for,
 )
 from werkzeug.utils import secure_filename
 
-from .config import load_config
-from .extraction import EMPTY_RESULT, fetch_and_extract_details
-from .fetch_jobs import run_fetch_cycle
+from .config import BASE_DIR
+from .extraction import empty_result
+from .fetch_jobs import (
+    apply_details, job_from_listing, load_details, merge_details_into_listing, missing_settings, runtime_config,
+)
+from .fetch_runner import snapshot, start_async
 from .matching import score_job
 from .models import (
-    STATUS_ARCHIVIERT,
-    STATUS_FLOW,
-    STATUS_KEYS,
-    CompanySource,
-    Document,
-    Job,
-    JobDocument,
-    db,
-    make_external_id,
+    STATUS_ARCHIVIERT, STATUS_FLOW, STATUS_KEYS, AppSetting, CompanySource, Document, Job, JobDocument,
+    ScraperRun, SearchProfile, SourceSetting, db, is_web_url, make_external_id,
 )
-from .scrapers.base import ScraperError
+from .scrapers import REGISTRY, SOURCE_HINTS, SOURCE_LABELS, source_label
+from .scrapers.base import JobListing, ScraperError
 from .scrapers.quick_add import fetch_from_url
-from .status import latest_run_per_source
+from .status import latest_run_per_source, run_kind
 
 bp = Blueprint("board", __name__)
+
+
+def _safe_next(default_endpoint="board.board", **kwargs):
+    target = request.form.get("next") or request.args.get("next") or ""
+    if target.startswith("/") and not target.startswith("//"):
+        return target
+    referrer = request.referrer or ""
+    if referrer and urlparse(referrer).netloc == request.host:
+        return referrer
+    return url_for(default_endpoint, **kwargs)
+
+
+def _clean_web_url(value: str) -> str:
+    value = (value or "").strip()
+    if value and not is_web_url(value) and "." in value and " " not in value:
+        value = "https://" + value
+    return value if is_web_url(value) else ""
+
+
+# ---------------------------------------------------------------- Board ----
 
 
 @bp.route("/")
 def board():
     columns = []
     for key, label in STATUS_FLOW:
-        jobs = (
-            Job.query.filter_by(status=key)
-            .order_by(Job.match_score.desc(), Job.fetched_at.desc())
-            .all()
-        )
-        columns.append({"key": key, "label": label, "jobs": jobs})
+        jobs = Job.query.filter_by(status=key).order_by(Job.match_score.desc(), Job.fetched_at.desc()).all()
+        hidden = []
+        if key == "neu":
+            hidden = [j for j in jobs if j.match_label == "unpassend"]
+            jobs = [j for j in jobs if j.match_label != "unpassend"]
+        columns.append({"key": key, "label": label, "jobs": jobs, "hidden_jobs": hidden})
     archived_count = Job.query.filter_by(status=STATUS_ARCHIVIERT).count()
-    return render_template("board.html", columns=columns, archived_count=archived_count)
+    return render_template("board.html", columns=columns, archived_count=archived_count, status_flow=STATUS_FLOW)
 
 
 @bp.route("/archiv")
@@ -58,68 +69,67 @@ def archive():
 
 @bp.route("/job/<int:job_id>/status", methods=["POST"])
 def update_status(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     data = request.get_json(silent=True) or request.form
     new_status = data.get("status")
     ok = new_status in STATUS_KEYS + [STATUS_ARCHIVIERT]
     if ok:
         job.status = new_status
         db.session.commit()
-
     if request.is_json:
         return jsonify({"ok": ok, "status": job.status})
-
-    next_url = request.form.get("next") or url_for("board.board")
-    return redirect(next_url)
+    return redirect(_safe_next())
 
 
 @bp.route("/job/<int:job_id>/delete", methods=["POST"])
 def delete_job(job_id):
-    """'Loeschen' = Archivieren (nicht interessant), Daten bleiben erhalten.
-    Endgueltiges Entfernen geht ueber /job/<id>/purge im Archiv."""
-    job = Job.query.get_or_404(job_id)
+    """"Löschen" im Board = archivieren. Endgültig löschen geht im Archiv."""
+    job = db.get_or_404(Job, job_id)
     job.status = STATUS_ARCHIVIERT
     db.session.commit()
-    return redirect(request.referrer or url_for("board.board"))
+    if request.is_json:
+        return jsonify({"ok": True})
+    return redirect(_safe_next())
 
 
 @bp.route("/job/<int:job_id>/purge", methods=["POST"])
 def purge_job(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     JobDocument.query.filter_by(job_id=job.id).delete()
     db.session.delete(job)
     db.session.commit()
+    flash("Job endgültig gelöscht.", "info")
     return redirect(url_for("board.archive"))
+
+
+# ----------------------------------------------------------- Job-Detail ----
 
 
 @bp.route("/job/<int:job_id>")
 def job_detail(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     linked_doc_ids = {jd.document_id for jd in job.documents}
     library_docs = Document.query.order_by(Document.doc_type, Document.title).all()
-    linked_docs = [d for d in library_docs if d.id in linked_doc_ids]
     return render_template(
         "job_detail.html",
         job=job,
         status_flow=STATUS_FLOW,
         archiv_status=STATUS_ARCHIVIERT,
         library_docs=library_docs,
-        linked_docs=linked_docs,
+        linked_docs=[d for d in library_docs if d.id in linked_doc_ids],
         linked_doc_ids=linked_doc_ids,
     )
 
 
 @bp.route("/job/<int:job_id>/save", methods=["POST"])
 def save_job(job_id):
-    job = Job.query.get_or_404(job_id)
-    job.cover_letter = request.form.get("cover_letter", "")
-    job.notes = request.form.get("notes", "")
-    job.contact_name = request.form.get("contact_name", "")
-    job.contact_email = request.form.get("contact_email", "")
-    job.contact_phone = request.form.get("contact_phone", "")
-    job.company_website = request.form.get("company_website", "")
-    job.requirements = request.form.get("requirements", "")
-    job.application_documents = request.form.get("application_documents", "")
+    job = db.get_or_404(Job, job_id)
+    for field in ("cover_letter", "notes", "tasks", "requirements", "application_documents",
+                  "contact_name", "contact_email", "contact_phone"):
+        if field in request.form:
+            setattr(job, field, request.form.get(field, "").strip())
+    if "company_website" in request.form:
+        job.company_website = _clean_web_url(request.form.get("company_website", ""))
     db.session.commit()
     flash("Gespeichert.", "success")
     return redirect(url_for("board.job_detail", job_id=job.id))
@@ -127,52 +137,58 @@ def save_job(job_id):
 
 @bp.route("/job/<int:job_id>/reextract", methods=["POST"])
 def reextract_job(job_id):
-    """Ruft die Original-Anzeige erneut ab und aktualisiert Ansprechpartner/
-    Website/Voraussetzungen/Bewerbungsunterlagen - falls sich die Anzeige
-    geaendert hat oder die erste Extraktion nichts fand."""
-    job = Job.query.get_or_404(job_id)
-    details = fetch_and_extract_details(job.url, load_config())
-    if not details:
-        flash(
-            "Anzeige konnte nicht erneut abgerufen werden (Link tot, Bot-Schutz "
-            "oder robots.txt untersagt es). Bitte Felder manuell pruefen.",
-            "error",
-        )
+    """Anzeige erneut abrufen und Aufgaben/Kontakt/Unterlagen neu auslesen.
+    Von Hand eingetragene Werte werden nur ueberschrieben, wenn neu etwas gefunden wurde."""
+    job = db.get_or_404(Job, job_id)
+    if not job.has_web_url():
+        flash("Dieser Job hat keinen Link zur Anzeige – nichts zum Auslesen.", "info")
         return redirect(url_for("board.job_detail", job_id=job.id))
 
-    job.contact_name = details["contact_name"] or job.contact_name
-    job.contact_email = details["contact_email"] or job.contact_email
-    job.contact_phone = details["contact_phone"] or job.contact_phone
-    job.company_website = details["company_website"] or job.company_website
-    job.requirements = details["requirements"] or job.requirements
-    job.application_documents = details["application_documents"] or job.application_documents
-    job.extraction_confidence = details["confidence"]
-    job.extraction_missing = ",".join(details["missing_fields"])
+    listing = JobListing(title=job.title, url=job.url, source=job.source, ref=job.source_ref or "")
+    details = load_details(listing, runtime_config())
+    if not details:
+        flash("Die Anzeige ließ sich nicht erneut abrufen (offline genommen, Bot-Schutz oder robots.txt).", "error")
+        return redirect(url_for("board.job_detail", job_id=job.id))
+
+    previous = {f: getattr(job, f) for f in ("tasks", "requirements", "application_documents", "contact_name",
+                                             "contact_email", "contact_phone", "company_website")}
+    apply_details(job, details)
+    for field, old in previous.items():
+        if not getattr(job, field) and old:
+            setattr(job, field, old)
     db.session.commit()
-    flash(f"Neu extrahiert: {job.extraction_confidence_text()}.", "info")
+    flash(f"Neu ausgelesen: {job.extraction_confidence_text()}.", "info")
     return redirect(url_for("board.job_detail", job_id=job.id))
 
 
 @bp.route("/job/<int:job_id>/documents/link", methods=["POST"])
 def link_document(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     doc_id = request.form.get("document_id", type=int)
-    if doc_id and not JobDocument.query.filter_by(job_id=job.id, document_id=doc_id).first():
+    if doc_id and db.session.get(Document, doc_id) and not JobDocument.query.filter_by(job_id=job.id, document_id=doc_id).first():
         db.session.add(JobDocument(job_id=job.id, document_id=doc_id))
         db.session.commit()
-    return redirect(url_for("board.job_detail", job_id=job.id))
+    return redirect(url_for("board.job_detail", job_id=job.id) + "#dokumente")
 
 
 @bp.route("/job/<int:job_id>/documents/<int:doc_id>/unlink", methods=["POST"])
 def unlink_document(job_id, doc_id):
     JobDocument.query.filter_by(job_id=job_id, document_id=doc_id).delete()
     db.session.commit()
-    return redirect(url_for("board.job_detail", job_id=job_id))
+    return redirect(url_for("board.job_detail", job_id=job_id) + "#dokumente")
 
 
-# ---- Zentrale Dokumentenbibliothek ("Meine Unterlagen") ----
+# ---------------------------------------------------- Meine Unterlagen ----
 
-ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "odt", "txt", "png", "jpg", "jpeg"}
+ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "odt", "txt", "rtf", "pages", "png", "jpg", "jpeg"}
+DOC_TYPES = [
+    ("lebenslauf", "Lebenslauf"),
+    ("anschreiben_vorlage", "Anschreiben-Vorlage"),
+    ("zeugnis", "Zeugnis"),
+    ("zertifikat", "Zertifikat"),
+    ("showreel", "Showreel / Arbeitsproben"),
+    ("sonstiges", "Sonstiges"),
+]
 
 
 def _allowed_file(filename):
@@ -182,28 +198,30 @@ def _allowed_file(filename):
 @bp.route("/unterlagen")
 def documents():
     docs = Document.query.order_by(Document.doc_type, Document.title).all()
-    return render_template("documents.html", docs=docs)
+    return render_template("documents.html", docs=docs, doc_types=DOC_TYPES, doc_type_labels=dict(DOC_TYPES))
 
 
 @bp.route("/unterlagen/upload", methods=["POST"])
 def upload_document():
     file = request.files.get("file")
     doc_type = request.form.get("doc_type", "sonstiges")
-    title = request.form.get("title") or (file.filename if file else "")
-
-    if not file or file.filename == "":
-        flash("Bitte eine Datei auswaehlen.", "error")
+    if doc_type not in dict(DOC_TYPES):
+        doc_type = "sonstiges"
+    if not file or not file.filename:
+        flash("Bitte eine Datei auswählen.", "error")
         return redirect(url_for("board.documents"))
     if not _allowed_file(file.filename):
-        flash("Dateityp nicht erlaubt.", "error")
+        flash("Dieser Dateityp wird nicht unterstützt (erlaubt: PDF, Word, Pages, Text, Bilder).", "error")
         return redirect(url_for("board.documents"))
 
-    safe_name = secure_filename(file.filename)
+    original_name = os.path.basename(file.filename)
+    extension = original_name.rsplit(".", 1)[1].lower()
+    safe_name = secure_filename(original_name) or f"dokument.{extension}"
     stored_name = f"{uuid.uuid4().hex}_{safe_name}"
     file.save(os.path.join(current_app.config["UPLOAD_DIR"], stored_name))
 
-    doc = Document(doc_type=doc_type, title=title, filename=safe_name, stored_path=stored_name)
-    db.session.add(doc)
+    title = request.form.get("title", "").strip() or original_name
+    db.session.add(Document(doc_type=doc_type, title=title, filename=original_name, stored_path=stored_name))
     db.session.commit()
     flash("Dokument hochgeladen.", "success")
     return redirect(url_for("board.documents"))
@@ -211,7 +229,7 @@ def upload_document():
 
 @bp.route("/unterlagen/<int:doc_id>/delete", methods=["POST"])
 def delete_document(doc_id):
-    doc = Document.query.get_or_404(doc_id)
+    doc = db.get_or_404(Document, doc_id)
     JobDocument.query.filter_by(document_id=doc.id).delete()
     try:
         os.remove(os.path.join(current_app.config["UPLOAD_DIR"], doc.stored_path))
@@ -219,16 +237,19 @@ def delete_document(doc_id):
         pass
     db.session.delete(doc)
     db.session.commit()
+    flash("Dokument gelöscht.", "info")
     return redirect(url_for("board.documents"))
 
 
 @bp.route("/unterlagen/<int:doc_id>/download")
 def download_document(doc_id):
-    doc = Document.query.get_or_404(doc_id)
-    return send_from_directory(current_app.config["UPLOAD_DIR"], doc.stored_path, download_name=doc.filename)
+    doc = db.get_or_404(Document, doc_id)
+    as_attachment = request.args.get("download") == "1"
+    return send_from_directory(current_app.config["UPLOAD_DIR"], doc.stored_path,
+                               download_name=doc.filename, as_attachment=as_attachment)
 
 
-# ---- Manuelles Hinzufuegen ----
+# ------------------------------------------------------ Job hinzufuegen ----
 
 
 @bp.route("/job/neu", methods=["GET", "POST"])
@@ -236,87 +257,47 @@ def add_job():
     if request.method == "GET":
         return render_template("add_job.html")
 
-    mode = request.form.get("mode")
-
-    if mode == "link":
+    if request.form.get("mode") == "link":
         url = request.form.get("url", "").strip()
-        if not url:
-            flash("Bitte einen Link angeben.", "error")
-            return redirect(url_for("board.add_job"))
-        try:
-            listing, details = fetch_from_url(url, load_config())
-        except ScraperError as exc:
-            flash(str(exc), "error")
-            return redirect(url_for("board.add_job"))
-
-        ext_id = make_external_id(listing.url)
-        existing = Job.query.filter_by(external_id=ext_id).first()
+        existing = Job.query.filter_by(external_id=make_external_id(url)).first() if url else None
         if existing:
             flash("Dieser Job ist schon im Board.", "info")
             return redirect(url_for("board.job_detail", job_id=existing.id))
-
-        score, label, reason = score_job(listing.title, listing.description, listing.location)
-        job = Job(
-            external_id=ext_id,
-            title=listing.title,
-            company=listing.company,
-            location=listing.location,
-            url=listing.url,
-            source=listing.source,
-            salary=listing.salary,
-            description=listing.description,
-            posted_at=listing.posted_at,
-            status="neu",
-            match_score=score,
-            match_label=label,
-            match_reason=reason,
-            contact_name=details["contact_name"],
-            contact_email=details["contact_email"],
-            contact_phone=details["contact_phone"],
-            company_website=details["company_website"],
-            requirements=details["requirements"],
-            application_documents=details["application_documents"],
-            extraction_confidence=details["confidence"],
-            extraction_missing=",".join(details["missing_fields"]),
+        try:
+            listing, details = fetch_from_url(url, runtime_config())
+        except ScraperError as exc:
+            flash(f"{exc} – du kannst den Job unten auch von Hand anlegen.", "error")
+            return redirect(url_for("board.add_job"))
+        merge_details_into_listing(listing, details)
+    else:
+        title = request.form.get("title", "").strip()
+        if not title:
+            flash("Bitte mindestens einen Titel angeben.", "error")
+            return redirect(url_for("board.add_job"))
+        url = _clean_web_url(request.form.get("url", "")) or f"manuell://{uuid.uuid4().hex}"
+        listing = JobListing(
+            title=title, url=url, source="manuell",
+            company=request.form.get("company", "").strip(),
+            location=request.form.get("location", "").strip(),
+            salary=request.form.get("salary", "").strip(),
+            description=request.form.get("description", "").strip(),
         )
-        db.session.add(job)
-        db.session.commit()
-        flash("Job hinzugefuegt.", "success")
-        return redirect(url_for("board.job_detail", job_id=job.id))
+        details = empty_result()
 
-    # mode == "manual": komplett von Hand ausgefuelltes Formular
-    title = request.form.get("title", "").strip()
-    url = request.form.get("url", "").strip() or f"manuell://{uuid.uuid4().hex}"
-    if not title:
-        flash("Bitte mindestens einen Titel angeben.", "error")
-        return redirect(url_for("board.add_job"))
+    existing = Job.query.filter_by(external_id=make_external_id(listing.url)).first()
+    if existing:
+        flash("Dieser Job ist schon im Board.", "info")
+        return redirect(url_for("board.job_detail", job_id=existing.id))
 
-    description = request.form.get("description", "")
-    location = request.form.get("location", "")
-    score, label, reason = score_job(title, description, location)
-
-    ext_id = make_external_id(url)
-    job = Job(
-        external_id=ext_id,
-        title=title,
-        company=request.form.get("company", ""),
-        location=location,
-        url=url,
-        source="manuell",
-        salary=request.form.get("salary", ""),
-        description=description,
-        status="neu",
-        match_score=score,
-        match_label=label,
-        match_reason=reason,
-    )
+    score, label, reason = score_job(listing.title, listing.description, listing.location)
+    job = job_from_listing(listing, details, score, label, reason)
     db.session.add(job)
     db.session.commit()
-    flash("Job hinzugefuegt.", "success")
+    flash("Job hinzugefügt.", "success")
     return redirect(url_for("board.job_detail", job_id=job.id))
 
 
-# ---- Firmen-Karriereseiten ----
+# ------------------------------------------------------------- Firmen ----
 
 
 @bp.route("/firmen")
@@ -328,19 +309,22 @@ def companies():
 @bp.route("/firmen/hinzufuegen", methods=["POST"])
 def add_company():
     name = request.form.get("name", "").strip()
-    url = request.form.get("career_url", "").strip()
+    url = _clean_web_url(request.form.get("career_url", ""))
     if not name or not url:
-        flash("Bitte Firmenname und Link zur Karriereseite angeben.", "error")
+        flash("Bitte Firmenname und einen gültigen Link zur Karriereseite angeben.", "error")
+        return redirect(url_for("board.companies"))
+    if CompanySource.query.filter_by(name=name).first():
+        flash("Eine Firma mit diesem Namen gibt es schon.", "error")
         return redirect(url_for("board.companies"))
     db.session.add(CompanySource(name=name, career_url=url, active=True))
     db.session.commit()
-    flash(f"{name} hinzugefuegt. Wird beim naechsten Fetch-Lauf mit durchsucht.", "success")
+    flash(f"{name} hinzugefügt – wird ab dem nächsten Suchlauf mit durchsucht.", "success")
     return redirect(url_for("board.companies"))
 
 
 @bp.route("/firmen/<int:source_id>/toggle", methods=["POST"])
 def toggle_company(source_id):
-    source = CompanySource.query.get_or_404(source_id)
+    source = db.get_or_404(CompanySource, source_id)
     source.active = not source.active
     db.session.commit()
     return redirect(url_for("board.companies"))
@@ -348,49 +332,159 @@ def toggle_company(source_id):
 
 @bp.route("/firmen/<int:source_id>/delete", methods=["POST"])
 def delete_company(source_id):
-    source = CompanySource.query.get_or_404(source_id)
+    source = db.get_or_404(CompanySource, source_id)
+    ScraperRun.query.filter_by(source=source.source_key).delete()
     db.session.delete(source)
     db.session.commit()
+    flash(f"{source.name} entfernt.", "info")
     return redirect(url_for("board.companies"))
 
 
-# ---- Manuellen Scraper-Lauf anstossen ----
+# ------------------------------------------------------- Einstellungen ----
+
+API_KEY_FIELDS = [
+    ("adzuna_app_id", "Adzuna App ID", "https://developer.adzuna.com"),
+    ("adzuna_app_key", "Adzuna App Key", "https://developer.adzuna.com"),
+    ("jooble_key", "Jooble API-Schlüssel", "https://jooble.org/api/about"),
+    ("serpapi_key", "SerpApi-Schlüssel (Google Jobs)", "https://serpapi.com"),
+]
+
+
+@bp.route("/einstellungen")
+def settings():
+    config = runtime_config()
+    settings_by_name = {s.name: s for s in SourceSetting.query.all()}
+    sources = []
+    for name, module in REGISTRY.items():
+        setting = settings_by_name.get(name)
+        sources.append({
+            "name": name,
+            "label": SOURCE_LABELS.get(name, name),
+            "hint": SOURCE_HINTS.get(name, ""),
+            "enabled": bool(setting and setting.enabled),
+            "missing": missing_settings(module, config),
+        })
+    keys = AppSetting.as_dict()
+    return render_template(
+        "settings.html",
+        profiles=SearchProfile.query.order_by(SearchProfile.location, SearchProfile.keywords).all(),
+        sources=sources,
+        key_fields=[(k, label, link, bool(keys.get(k))) for k, label, link in API_KEY_FIELDS],
+    )
+
+
+@bp.route("/einstellungen/profil", methods=["POST"])
+def add_profile():
+    keywords = request.form.get("keywords", "").strip()
+    location = request.form.get("location", "").strip()
+    radius = request.form.get("radius_km", type=int) or 25
+    if not keywords:
+        flash("Bitte einen Suchbegriff angeben.", "error")
+    else:
+        db.session.add(SearchProfile(keywords=keywords, location=location, radius_km=max(0, min(radius, 200))))
+        db.session.commit()
+        flash(f"Suchprofil „{keywords}“ angelegt.", "success")
+    return redirect(url_for("board.settings") + "#profile")
+
+
+@bp.route("/einstellungen/profil/<int:profile_id>/toggle", methods=["POST"])
+def toggle_profile(profile_id):
+    profile = db.get_or_404(SearchProfile, profile_id)
+    profile.active = not profile.active
+    db.session.commit()
+    return redirect(url_for("board.settings") + "#profile")
+
+
+@bp.route("/einstellungen/profil/<int:profile_id>/delete", methods=["POST"])
+def delete_profile(profile_id):
+    db.session.delete(db.get_or_404(SearchProfile, profile_id))
+    db.session.commit()
+    return redirect(url_for("board.settings") + "#profile")
+
+
+@bp.route("/einstellungen/quelle/<name>/toggle", methods=["POST"])
+def toggle_source(name):
+    if name not in REGISTRY:
+        return redirect(url_for("board.settings"))
+    setting = db.session.get(SourceSetting, name) or SourceSetting(name=name, enabled=False)
+    setting.enabled = not setting.enabled
+    db.session.add(setting)
+    db.session.commit()
+    return redirect(url_for("board.settings") + "#quellen")
+
+
+@bp.route("/einstellungen/schluessel", methods=["POST"])
+def save_keys():
+    for key, _, _ in API_KEY_FIELDS:
+        value = request.form.get(key, "").strip()
+        if request.form.get(f"clear_{key}"):
+            value = ""
+        elif not value:
+            continue  # leeres Feld = bestehenden Schluessel behalten
+        setting = db.session.get(AppSetting, key) or AppSetting(key=key)
+        setting.value = value
+        db.session.add(setting)
+    db.session.commit()
+    flash("Schlüssel gespeichert.", "success")
+    return redirect(url_for("board.settings") + "#schluessel")
+
+
+# ----------------------------------------------------------- Suchlauf ----
 
 
 @bp.route("/fetch-now", methods=["POST"])
 def fetch_now():
-    result = run_fetch_cycle(current_app._get_current_object())
-    if result["new_jobs"]:
-        flash(f"{result['new_jobs']} neue Job(s) gefunden.", "success")
+    if start_async(current_app._get_current_object()):
+        flash("Suche gestartet – neue Jobs erscheinen automatisch, du kannst normal weiterarbeiten.", "info")
     else:
-        flash("Keine neuen Jobs gefunden.", "info")
-    for err in result["errors"]:
-        flash(err, "error")
-    return redirect(url_for("board.board"))
+        flash("Es läuft bereits eine Suche.", "info")
+    return redirect(_safe_next())
 
 
-# ---- Status: dauerhaftes Protokoll statt fluechtiger Flash-Meldungen ----
+@bp.route("/fetch-status")
+def fetch_status():
+    return jsonify(snapshot())
+
+
+# ------------------------------------------------------------- Status ----
+
+
+def _app_version():
+    try:
+        out = subprocess.run(["git", "log", "-1", "--format=%h %cd", "--date=format:%d.%m.%Y %H:%M"],
+                             cwd=BASE_DIR, capture_output=True, text=True, timeout=3)
+        return out.stdout.strip() or "unbekannt"
+    except Exception:
+        return "unbekannt"
 
 
 @bp.route("/status")
 def status():
     latest = latest_run_per_source()
-    broken = [s for s, r in latest.items() if not r.ok]
-    return render_template("status.html", latest=latest, broken=broken)
+    rows = [{"source": s, "label": source_label(s), "run": r, "kind": run_kind(r)} for s, r in latest.items()]
+    return render_template("status.html", rows=rows, version=_app_version())
 
 
 @bp.route("/status/text")
 def status_text():
-    """Reiner Text-Dump zum Kopieren - schick das einfach 1:1 weiter, wenn
-    eine Quelle nicht funktioniert, dann muss niemand die Meldungen selbst
-    verstehen."""
-    lines = ["Bewerbungs-Board - Quellen-Status", "=" * 34, ""]
+    """Klartext-Diagnose zum Kopieren an Claude."""
+    config = runtime_config()
+    enabled = sorted(s.name for s in SourceSetting.query.filter_by(enabled=True).all())
+    lines = [
+        "Bewerbungs-Board – Diagnose",
+        "=" * 30,
+        f"Version: {_app_version()}",
+        f"Aktive Quellen: {', '.join(enabled) or 'keine'}",
+        f"Fehlende Schlüssel: {', '.join(n for n in enabled if n in REGISTRY and missing_settings(REGISTRY[n], config)) or 'keine'}",
+        f"Aktive Suchprofile: {SearchProfile.query.filter_by(active=True).count()}",
+        f"Aktive Firmen: {CompanySource.query.filter_by(active=True).count()}",
+        f"Jobs gesamt: {Job.query.count()}",
+        "",
+    ]
     latest = latest_run_per_source()
     if not latest:
-        lines.append("Noch kein Fetch-Lauf protokolliert. Einmal 'Jetzt nach neuen Jobs suchen' klicken.")
+        lines.append("Noch kein Suchlauf protokolliert.")
     for source, run in latest.items():
-        state = "OK" if run.ok else "FEHLER"
-        lines.append(f"[{state}] {source} - zuletzt {run.ran_at.strftime('%Y-%m-%d %H:%M UTC')}")
+        lines.append(f"[{run_kind(run).upper()}] {source} – {run.ran_at:%Y-%m-%d %H:%M} UTC – neu: {run.new_jobs}")
         lines.append(f"    {run.message}")
-        lines.append("")
-    return "\n".join(lines), 200, {"Content-Type": "text/plain; charset=utf-8"}
+    return "\n".join(lines) + "\n", 200, {"Content-Type": "text/plain; charset=utf-8"}

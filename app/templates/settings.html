@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Einstellungen{% endblock %}
+{% block content %}
+<h1>Einstellungen</h1>
+
+<section class="panel" id="profile">
+  <h3>Wonach gesucht wird</h3>
+  <p class="hint">Jeder Eintrag wird bei jeder Suche in allen aktiven Quellen abgefragt. Ohne Ort wird deutschlandweit
+    gesucht. Das lohnt sich für kurze Set-Einsätze, die Bewertung sortiert dauerhafte Stellen woanders dann nach hinten.</p>
+  <table class="doc-table">
+    <thead><tr><th>Suchbegriff</th><th>Ort</th><th>Umkreis</th><th></th></tr></thead>
+    <tbody>
+      {% for p in profiles %}
+      <tr class="{{ '' if p.active else 'muted' }}">
+        <td>{{ p.keywords }}</td>
+        <td>{{ p.location or "deutschlandweit" }}</td>
+        <td>{% if p.location %}{{ p.radius_km }} km{% endif %}</td>
+        <td class="row-actions">
+          <form action="{{ url_for('board.toggle_profile', profile_id=p.id) }}" method="post" class="inline-form">
+            <button type="submit" class="ghost small">{{ "Pausieren" if p.active else "Aktivieren" }}</button>
+          </form>
+          <form action="{{ url_for('board.delete_profile', profile_id=p.id) }}" method="post" class="inline-form">
+            <button type="submit" class="ghost small danger-text">Entfernen</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">Noch keine Suchprofile.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form action="{{ url_for('board.add_profile') }}" method="post" class="profile-form">
+    <input type="text" name="keywords" placeholder="Suchbegriff, z. B. Kameraassistent" required>
+    <input type="text" name="location" placeholder="Ort (leer = deutschlandweit)">
+    <input type="number" name="radius_km" value="25" min="0" max="200" title="Umkreis in km">
+    <button type="submit">Hinzufügen</button>
+  </form>
+</section>
+
+<section class="panel" id="quellen">
+  <h3>Quellen</h3>
+  <table class="doc-table">
+    <tbody>
+      {% for s in sources %}
+      <tr class="{{ '' if s.enabled else 'muted' }}">
+        <td><strong>{{ s.label }}</strong><div class="hint">{{ s.hint }}</div></td>
+        <td>
+          {% if s.missing %}<span class="badge badge-info">Schlüssel fehlt</span>
+          {% elif s.enabled %}<span class="badge badge-top">an</span>
+          {% else %}<span class="badge badge-muted">aus</span>{% endif %}
+        </td>
+        <td class="row-actions">
+          {% if s.missing %}
+          <a class="ghost-link" href="#schluessel">Schlüssel eintragen ↓</a>
+          {% else %}
+          <form action="{{ url_for('board.toggle_source', name=s.name) }}" method="post" class="inline-form">
+            <button type="submit" class="ghost small">{{ "Ausschalten" if s.enabled else "Einschalten" }}</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">LinkedIn verbietet automatische Abfragen. LinkedIn-Jobs trägst du über „+ Job hinzufügen“ per Link ein.</p>
+</section>
+
+<section class="panel narrow" id="schluessel">
+  <h3>API-Schlüssel (optional)</h3>
+  <p class="hint">Mehr Treffer über offizielle Schnittstellen. Adzuna ist kostenlos und in 2 Minuten eingerichtet.
+    Gespeicherte Schlüssel werden nicht angezeigt. Ein leeres Feld lässt den vorhandenen Schlüssel unverändert.</p>
+  <form action="{{ url_for('board.save_keys') }}" method="post" class="stack">
+    {% for key, label, link, has_value in key_fields %}
+    <div class="field">
+      <label for="key-{{ key }}">{{ label }} {% if has_value %}<span class="badge badge-top">gespeichert</span>{% endif %}</label>
+      <input id="key-{{ key }}" type="text" name="{{ key }}" autocomplete="off" placeholder="{{ 'gespeichert – zum Ändern neu eintragen' if has_value else 'noch nicht eingetragen' }}">
+      <span class="hint"><a href="{{ link }}" target="_blank" rel="noopener noreferrer">Schlüssel holen ↗</a>
+        {% if has_value %} · <label class="inline-check"><input type="checkbox" name="clear_{{ key }}"> entfernen</label>{% endif %}</span>
+    </div>
+    {% endfor %}
+    <button type="submit">Schlüssel speichern</button>
+  </form>
+</section>
+{% endblock %}

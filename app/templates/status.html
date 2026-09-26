@@ -2,37 +2,40 @@
 {% block title %}Status{% endblock %}
 {% block content %}
 <h1>Quellen-Status</h1>
+<p class="hint">Version {{ version }} · Ergebnis des letzten Suchlaufs je Quelle.</p>
 
-{% if not latest %}
-<p class="hint">Noch kein Fetch-Lauf protokolliert. Klicke oben auf "Jetzt nach neuen Jobs suchen".</p>
-{% elif broken %}
-<div class="extract-box confidence-unsicher">
-  <strong>{{ broken|length }} von {{ latest|length }} Quelle(n) funktionieren gerade nicht.</strong>
-  <p class="hint">Kopier dir unten den Text und schick ihn Claude - Details musst du dabei nicht verstehen.</p>
+{% set errors = rows|selectattr('kind', 'equalto', 'error')|list %}
+{% if not rows %}
+<p class="empty">Noch kein Suchlauf. Er startet automatisch kurz nach dem Öffnen der App, du kannst ihn oben aber auch selbst anstoßen.</p>
+{% elif errors %}
+<div class="panel extract-box confidence-unsicher">
+  <strong>{{ errors|length }} Quelle(n) mit Fehler.</strong> Kopier die Diagnose und schick sie Claude, das Reparieren übernimmt Claude.
+  <div style="margin-top:.6rem"><button type="button" onclick="copyDiagnoseForClaude(this)">Für Claude kopieren</button></div>
 </div>
 {% else %}
-<div class="extract-box confidence-vollstaendig">
-  <strong>Alle {{ latest|length }} Quelle(n) haben beim letzten Lauf funktioniert.</strong>
-</div>
+<div class="panel extract-box confidence-vollstaendig"><strong>Keine Fehler.</strong> Gelb markierte Quellen blockieren automatische Abfragen von sich aus. Das ist kein Bug.</div>
 {% endif %}
 
 <table class="doc-table">
-  <thead><tr><th>Quelle</th><th>Status</th><th>Zuletzt</th><th>Details</th></tr></thead>
+  <thead><tr><th>Quelle</th><th>Status</th><th>Zuletzt</th><th>Neu</th><th>Details</th></tr></thead>
   <tbody>
-    {% for source, run in latest.items() %}
+    {% for row in rows %}
     <tr>
-      <td>{{ source }}</td>
+      <td>{{ row.label }}</td>
       <td>
-        <span class="badge badge-{{ 'top' if run.ok else 'unpassend' }}">{{ "OK" if run.ok else "Fehler" }}</span>
+        {% if row.kind == 'ok' %}<span class="badge badge-top">OK</span>
+        {% elif row.kind == 'blocked' %}<span class="badge badge-pruefen" title="Die Seite lässt automatische Abfragen nicht zu. Jobs von dort per Link-Import eintragen.">blockiert</span>
+        {% elif row.kind == 'config' %}<span class="badge badge-info">Einstellung fehlt</span>
+        {% elif row.kind == 'offline' %}<span class="badge badge-muted" title="Beim letzten Lauf war kein Internet da.">offline</span>
+        {% else %}<span class="badge badge-unpassend">Fehler</span>{% endif %}
       </td>
-      <td class="hint">{{ run.ran_at.strftime("%d.%m.%Y %H:%M") }} UTC</td>
-      <td class="hint">{{ run.message }}</td>
+      <td class="hint">{{ row.run.ran_at|localtime }}</td>
+      <td>{{ row.run.new_jobs }}</td>
+      <td class="hint">{{ row.run.message }}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 
-<h3>Fuer Claude zum Kopieren</h3>
-<p class="hint">Ein Klick kopiert den kompletten Diagnosebericht in die Zwischenablage - danach einfach im Chat mit Claude einfuegen (Cmd+V).</p>
-<button type="button" onclick="copyDiagnoseForClaude(this)">Für Claude kopieren</button>
+<p class="hint" style="margin-top:1rem">Diagnose für Claude, auch ohne Fehler: <button type="button" class="ghost small" onclick="copyDiagnoseForClaude(this)">Kopieren</button></p>
 {% endblock %}

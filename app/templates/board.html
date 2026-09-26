@@ -7,34 +7,29 @@
     <h2>{{ column.label }} <span class="count">{{ column.jobs|length }}</span></h2>
     <div class="cards" data-status="{{ column.key }}">
       {% for job in column.jobs %}
-      <article class="card" draggable="true" data-job-id="{{ job.id }}">
-        <span class="badge badge-{{ job.match_label }}" title="{{ job.match_reason }}">{{ job.match_label_text() }} &middot; {{ (job.match_score * 100)|round|int }}%</span>
-        <a class="card-title" href="{{ url_for('board.job_detail', job_id=job.id) }}">{{ job.title }}</a>
-        <div class="card-meta">
-          {{ job.company or "Unbekannte Firma" }}{% if job.location %} &middot; {{ job.location }}{% endif %}
-        </div>
-        <div class="card-source">Quelle: {{ job.source }}</div>
-        <div class="card-actions">
-          <form action="{{ url_for('board.update_status', job_id=job.id) }}" method="post" class="inline-form js-status-form">
-            <input type="hidden" name="next" value="{{ url_for('board.board') }}">
-            <select name="status" onchange="this.form.submit()">
-              {% for key, label in [("neu","Neu"),("interessant","Interessant"),("vorbereitung","In Vorbereitung"),("beworben","Beworben"),("rueckmeldung","Rueckmeldung")] %}
-              <option value="{{ key }}" {% if key == column.key %}selected{% endif %}>{{ label }}</option>
-              {% endfor %}
-            </select>
-          </form>
-          <form action="{{ url_for('board.delete_job', job_id=job.id) }}" method="post">
-            <button type="submit" class="danger">Loeschen</button>
-          </form>
-        </div>
-      </article>
-      {% else %}
-      <p class="empty">Keine Jobs.</p>
+        {% include "_card.html" %}
       {% endfor %}
+      <p class="empty {% if column.jobs %}hidden{% endif %}">
+        {% if column.key == 'neu' %}Noch keine neuen Jobs. Die Suche läuft automatisch, du kannst sie oben aber auch selbst starten.{% else %}Hierher ziehen{% endif %}
+      </p>
     </div>
+    {% if column.hidden_jobs %}
+    <details class="hidden-jobs">
+      <summary>{{ column.hidden_jobs|length }} eher unpassende ausgeblendet</summary>
+      <div class="cards" data-status="{{ column.key }}">
+        {% for job in column.hidden_jobs %}
+          {% include "_card.html" %}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
   </section>
   {% endfor %}
 </div>
-<p class="hint">{{ archived_count }} Job(s) im <a href="{{ url_for('board.archive') }}">Archiv</a>. Tipp: Karten lassen sich per Drag &amp; Drop in eine andere Spalte ziehen.</p>
+<p class="hint board-hint">
+  Karten per Drag &amp; Drop in eine andere Spalte ziehen. „Löschen“ verschiebt ins <a href="{{ url_for('board.archive') }}">Archiv</a> ({{ archived_count }}), dort geht nichts verloren.
+</p>
+{% endblock %}
+{% block scripts %}
 <script src="{{ url_for('static', filename='board.js') }}"></script>
 {% endblock %}

@@ -1,81 +1,81 @@
-"""Gemeinsame Hilfsfunktion: schema.org JobPosting aus JSON-LD extrahieren.
+"""schema.org/JobPosting aus JSON-LD lesen.
 
-Viele Jobbörsen (u.a. Indeed, StepStone) betten strukturierte Daten nach
-schema.org/JobPosting als <script type="application/ld+json"> ein, damit
-Google-for-Jobs die Anzeige indexieren kann. Das ist der robusteste Weg,
-Titel/Firma/Ort/Gehalt aus einer Job-Detailseite zu ziehen, weil er nicht
-von wechselndem CSS/HTML abhaengt - vorausgesetzt die Seite liefert das
-JSON-LD ueberhaupt aus (manche Seiten mit Bot-Schutz liefern schon die
-Rohdaten nicht aus, siehe README).
+Viele Jobseiten betten JobPosting-Daten fuer Google-for-Jobs ein. Das ist
+robuster als HTML-Selektoren, weil es nicht vom Seitenlayout abhaengt.
 """
 
+import html as html_lib
 import json
+import warnings
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from .base import JobListing
 
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
-def _flatten(node):
+
+def _is_jobposting(node) -> bool:
+    if not isinstance(node, dict):
+        return False
+    types = node.get("@type")
+    if isinstance(types, str):
+        types = [types]
+    return isinstance(types, list) and "JobPosting" in types
+
+
+def _walk(node):
+    """Alle Knoten inkl. Listen und "@graph"-Container (Yoast & Co.)."""
     if isinstance(node, list):
         for item in node:
-            yield from _flatten(item)
-    else:
+            yield from _walk(item)
+    elif isinstance(node, dict):
         yield node
+        if "@graph" in node:
+            yield from _walk(node["@graph"])
 
 
-def extract_jobpostings(html: str, source: str, fallback_url: str = ""):
-    """Gibt eine Liste von JobListing zurueck, die in der Seite als
-    JobPosting-JSON-LD gefunden wurden. Leere Liste, wenn nichts gefunden wurde."""
-    soup = BeautifulSoup(html, "html.parser")
-    results = []
+def _jsonld_nodes(page_html: str):
+    soup = BeautifulSoup(page_html, "html.parser")
     for tag in soup.find_all("script", type="application/ld+json"):
         raw = tag.string or tag.get_text()
         if not raw:
             continue
         try:
-            data = json.loads(raw)
+            data = json.loads(raw.strip())
         except (json.JSONDecodeError, TypeError):
             continue
-        for node in _flatten(data):
-            if not isinstance(node, dict):
-                continue
-            if node.get("@type") not in ("JobPosting", ["JobPosting"]):
-                continue
-            listing = _jobposting_to_listing(node, source, fallback_url)
-            if listing and listing.is_valid():
-                results.append(listing)
-    return results
+        yield from _walk(data)
 
 
-def extract_raw_jobposting_node(html: str):
-    """Gibt den ersten rohen JobPosting-JSON-LD-Knoten zurueck (oder None).
-    Wird von app/extraction.py genutzt, um Felder zu lesen, die
-    _jobposting_to_listing nicht ins normalisierte JobListing uebernimmt
-    (Anforderungen, Organisations-Website, ...)."""
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup.find_all("script", type="application/ld+json"):
-        raw = tag.string or tag.get_text()
-        if not raw:
-            continue
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        for node in _flatten(data):
-            if isinstance(node, dict) and node.get("@type") in ("JobPosting", ["JobPosting"]):
-                return node
+def html_to_text(value) -> str:
+    if not value:
+        return ""
+    text = html_lib.unescape(str(value))
+    if "<" not in text:
+        return " ".join(text.split())
+    return BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+
+
+def extract_raw_jobposting_node(page_html: str):
+    for node in _jsonld_nodes(page_html):
+        if _is_jobposting(node):
+            return node
     return None
 
 
-def _jobposting_to_listing(node: dict, source: str, fallback_url: str) -> JobListing:
-    title = node.get("title") or ""
-    url = node.get("url") or fallback_url
+def extract_jobpostings(page_html: str, source: str, fallback_url: str = ""):
+    results = []
+    for node in _jsonld_nodes(page_html):
+        if not _is_jobposting(node):
+            continue
+        listing = jobposting_to_listing(node, source, fallback_url)
+        if listing.is_valid():
+            results.append(listing)
+    return results
 
-    org = node.get("hiringOrganization") or {}
-    company = org.get("name", "") if isinstance(org, dict) else str(org)
 
-    location = ""
+def _location_of(node: dict) -> str:
     job_location = node.get("jobLocation")
     if isinstance(job_location, list) and job_location:
         job_location = job_location[0]
@@ -83,28 +83,47 @@ def _jobposting_to_listing(node: dict, source: str, fallback_url: str) -> JobLis
         address = job_location.get("address", {})
         if isinstance(address, dict):
             parts = [address.get("addressLocality", ""), address.get("addressRegion", "")]
-            location = ", ".join(p for p in parts if p)
+            return ", ".join(p for p in parts if isinstance(p, str) and p)
+        if isinstance(address, str):
+            return address
+    if str(node.get("jobLocationType", "")).upper() == "TELECOMMUTE":
+        return "Remote"
+    return ""
 
-    salary = ""
+
+def _salary_of(node: dict) -> str:
     base_salary = node.get("baseSalary")
-    if isinstance(base_salary, dict):
-        value = base_salary.get("value", {})
-        if isinstance(value, dict):
-            min_v, max_v, unit = value.get("minValue"), value.get("maxValue"), value.get("unitText", "")
-            currency = base_salary.get("currency", "")
-            if min_v or max_v:
-                salary = f"{min_v or ''}-{max_v or ''} {currency} / {unit}".strip()
+    if not isinstance(base_salary, dict):
+        return ""
+    value = base_salary.get("value", {})
+    currency = base_salary.get("currency", "")
+    if isinstance(value, dict):
+        min_v, max_v, unit = value.get("minValue"), value.get("maxValue"), value.get("unitText", "")
+        if value.get("value") and not (min_v or max_v):
+            min_v = max_v = value.get("value")
+        if min_v or max_v:
+            span = f"{min_v}" if min_v == max_v else f"{min_v or '?'}–{max_v or '?'}"
+            return f"{span} {currency} / {unit}".strip(" /")
+    elif isinstance(value, (int, float)):
+        return f"{value} {currency}".strip()
+    return ""
 
-    description = node.get("description", "") or ""
-    description = BeautifulSoup(description, "html.parser").get_text(" ", strip=True)[:5000]
+
+def jobposting_to_listing(node: dict, source: str, fallback_url: str = "") -> JobListing:
+    url = node.get("url") if isinstance(node.get("url"), str) else ""
+    if not url.lower().startswith(("http://", "https://")):
+        url = fallback_url
+
+    org = node.get("hiringOrganization") or {}
+    company = org.get("name", "") if isinstance(org, dict) else str(org)
 
     return JobListing(
-        title=title,
+        title=html_to_text(node.get("title") or "")[:300],
         url=url,
         source=source,
-        company=company,
-        location=location,
-        salary=salary,
-        description=description,
-        posted_at=node.get("datePosted", ""),
+        company=(company or "")[:200],
+        location=_location_of(node)[:200],
+        salary=_salary_of(node),
+        description=html_to_text(node.get("description") or "")[:6000],
+        posted_at=str(node.get("datePosted", ""))[:50],
     )

@@ -2,35 +2,34 @@
 {% block title %}Meine Unterlagen{% endblock %}
 {% block content %}
 <h1>Meine Unterlagen</h1>
-<p class="hint">Lebenslauf, Anschreiben-Vorlagen, Zeugnisse etc. zentral ablegen und bei einzelnen Bewerbungen verknuepfen.</p>
+<p class="hint">Einmal hochladen, bei jeder Bewerbung mit einem Klick verknüpfen: Lebenslauf, Anschreiben-Vorlagen,
+  Zeugnisse, Showreel-Links als PDF …</p>
 
-<form action="{{ url_for('board.upload_document') }}" method="post" enctype="multipart/form-data" class="stack">
-  <label>Titel <input type="text" name="title" placeholder="z.B. Lebenslauf 2026"></label>
-  <label>Typ
-    <select name="doc_type">
-      <option value="lebenslauf">Lebenslauf</option>
-      <option value="anschreiben_vorlage">Anschreiben-Vorlage</option>
-      <option value="zeugnis">Zeugnis</option>
-      <option value="zertifikat">Zertifikat</option>
-      <option value="sonstiges">Sonstiges</option>
-    </select>
-  </label>
-  <label>Datei <input type="file" name="file" required></label>
-  <button type="submit">Hochladen</button>
-</form>
+<section class="panel narrow">
+  <form action="{{ url_for('board.upload_document') }}" method="post" enctype="multipart/form-data" class="stack">
+    <label>Datei <input type="file" name="file" required></label>
+    <label>Titel <input type="text" name="title" placeholder="z. B. Lebenslauf 2026 (sonst Dateiname)"></label>
+    <label>Art
+      <select name="doc_type">
+        {% for key, label in doc_types %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Hochladen</button>
+  </form>
+</section>
 
 <table class="doc-table">
-  <thead><tr><th>Titel</th><th>Typ</th><th>Hochgeladen</th><th></th></tr></thead>
+  <thead><tr><th>Titel</th><th>Art</th><th>Hochgeladen</th><th></th></tr></thead>
   <tbody>
     {% for doc in docs %}
     <tr>
-      <td>{{ doc.title }}</td>
-      <td>{{ doc.doc_type }}</td>
-      <td>{{ doc.uploaded_at.strftime("%d.%m.%Y") if doc.uploaded_at else "" }}</td>
-      <td>
-        <a href="{{ url_for('board.download_document', doc_id=doc.id) }}">Download</a>
-        <form action="{{ url_for('board.delete_document', doc_id=doc.id) }}" method="post" class="inline-form">
-          <button type="submit" class="danger small">Loeschen</button>
+      <td><a href="{{ url_for('board.download_document', doc_id=doc.id) }}" target="_blank">{{ doc.title }}</a></td>
+      <td>{{ doc_type_labels.get(doc.doc_type, doc.doc_type) }}</td>
+      <td class="hint">{{ doc.uploaded_at|localtime('%d.%m.%Y') }}</td>
+      <td class="row-actions">
+        <a class="ghost-link" href="{{ url_for('board.download_document', doc_id=doc.id, download=1) }}">Download</a>
+        <form action="{{ url_for('board.delete_document', doc_id=doc.id) }}" method="post" class="inline-form" onsubmit="return confirm('Dokument löschen? Es wird auch von allen Bewerbungen entfernt.')">
+          <button type="submit" class="danger small">Löschen</button>
         </form>
       </td>
     </tr>

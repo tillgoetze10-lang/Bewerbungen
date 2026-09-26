@@ -7,3 +7,5 @@ data/uploads/*
 !data/uploads/.gitkeep
 config.yaml
 .env
+data/secret_key
+*.log

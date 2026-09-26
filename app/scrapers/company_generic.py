@@ -1,21 +1,16 @@
-"""Generischer Scraper fuer selbst hinterlegte Firmen-Karriereseiten.
+"""Generischer Scraper fuer hinterlegte Firmen-Karriereseiten.
 
-Firmen-Karriereseiten laufen auf sehr unterschiedlichen Systemen (Personio,
-SmartRecruiters, Workday, Greenhouse, eigene CMS...). Es gibt daher keinen
-Ansatz, der ueberall gleich gut funktioniert. Diese Implementierung probiert
-zwei Strategien der Reihe nach:
-
-1. schema.org/JobPosting JSON-LD (viele ATS-Systeme liefern das fuer SEO aus)
-2. Fallback: alle Links auf der Seite einsammeln, deren sichtbarer Text nach
-   einem der hinterlegten Berufsbezeichnungen klingt (app/matching.py)
-
-Das deckt nicht jede Karriereseite ab - aber lieber eine solide Basis, die
-bei manchen Firmen sofort funktioniert und sich pro Firma leicht per Hand
-nachschaerfen laesst (z.B. eigene *.py-Datei mit spezifischen Selektoren,
-falls eine bestimmte Firma wichtig ist und der generische Ansatz versagt).
+Strategien der Reihe nach:
+1. schema.org/JobPosting JSON-LD (viele Bewerbermanagement-Systeme liefern das)
+2. Links, die nach einer einzelnen Stellenanzeige aussehen: URL enthaelt
+   job/karriere/stellen/... ODER der Linktext traegt "(m/w/d)" o.ae.
+   Damit landen Navigationspunkte wie "Postproduktion" oder "Kamera" einer
+   Produktionsfirma NICHT als vermeintliche Jobs im Board.
+Die inhaltliche Filterung (passt der Beruf?) macht app/matching.py.
 """
 
-from urllib.parse import urljoin
+import re
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -24,6 +19,9 @@ from .base import JobListing, ScraperError
 from .http_utils import get
 from .jsonld import extract_jobpostings
 
+JOB_URL_HINTS = ("job", "karriere", "career", "stellen", "vacanc", "position", "ausschreibung", "offene-stellen", "jobs")
+GENDER_MARKER_RE = re.compile(r"\((?:m|w|d|f|x|div|all genders?)(?:\s*/\s*(?:m|w|d|f|x|div))+\)|\bm/w/d\b|\bw/m/d\b|\bm/f/d\b", re.IGNORECASE)
+
 
 def search_company(company_name: str, career_url: str, config: dict):
     html = get(career_url, config)
@@ -31,37 +29,47 @@ def search_company(company_name: str, career_url: str, config: dict):
 
     listings = extract_jobpostings(html, source=source_name, fallback_url=career_url)
     if not listings:
-        listings = _parse_generic_links(html, career_url, source_name)
+        listings = _parse_job_links(html, career_url, source_name)
 
+    for listing in listings:
+        if not listing.company:
+            listing.company = company_name
+
+    relevant = [l for l in listings if score_title(l.title, l.description)[0] > 0]
     if not listings:
         raise ScraperError(
-            f"{company_name}: keine Jobs auf der Seite gefunden (weder JSON-LD noch "
-            "passende Link-Texte). Seitenstruktur vermutlich zu speziell fuer den "
-            "generischen Scraper - ggf. manuell pruefen oder eigenes Scraper-Modul schreiben."
+            f"{company_name}: Karriereseite geladen, aber keine Stellenanzeigen erkannt "
+            "(evtl. per JavaScript geladen oder ungewöhnliches Layout)."
         )
-
-    # Nur Treffer behalten, die ueberhaupt zu einer der hinterlegten
-    # Berufsbezeichnungen passen - sonst wuerde jede Firmenseite ihre
-    # komplette (oft branchenfremde) Stellenliste ins Board kippen.
-    relevant = [l for l in listings if score_title(l.title, l.description)[0] > 0]
     return relevant
 
 
-def _parse_generic_links(html: str, base_url: str, source_name: str):
+def _looks_like_job_link(title: str, url: str, career_url: str) -> bool:
+    if GENDER_MARKER_RE.search(title):
+        return True
+    path = urlparse(url).path.lower()
+    career_path = urlparse(career_url).path.rstrip("/").lower()
+    if path.rstrip("/") == career_path:
+        return False
+    return any(hint in path for hint in JOB_URL_HINTS) and len(path.rstrip("/")) > len(career_path)
+
+
+def _parse_job_links(html: str, base_url: str, source_name: str):
     soup = BeautifulSoup(html, "html.parser")
-    listings = []
-    seen = set()
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    listings, seen = [], set()
     for link in soup.find_all("a", href=True):
-        title = link.get_text(strip=True)
-        href = link["href"]
-        if not title or len(title) < 4:
+        href = link["href"].strip()
+        if href.startswith(("mailto:", "tel:", "javascript:", "#")):
             continue
-        # Grobe Heuristik: nur Links, die selbst nach einer Stellenanzeige
-        # aussehen (matching.py entscheidet inhaltlich, hier nur Rauschen raus).
-        if score_title(title, "")[0] == 0:
+        title = " ".join(link.get_text(" ", strip=True).split())
+        if len(title) < 6 or len(title) > 200:
             continue
-        full_url = urljoin(base_url, href)
-        if full_url in seen:
+        full_url = urljoin(base_url, href).split("#")[0]
+        if not full_url.startswith(("http://", "https://")) or full_url in seen:
+            continue
+        if not _looks_like_job_link(title, full_url, base_url):
             continue
         seen.add(full_url)
         listings.append(JobListing(title=title, url=full_url, source=source_name))

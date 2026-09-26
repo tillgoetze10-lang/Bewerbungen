@@ -1,0 +1,388 @@
+"""Tests ohne Internet: Jobboersen werden mit festen Antworten simuliert.
+
+Ausfuehren:  .venv/bin/python -m unittest discover -s tests -v
+"""
+
+import base64
+import io
+import json
+import os
+import sqlite3
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+import requests
+
+import app.scrapers.http_utils as http_utils
+from app import create_app
+from app.extraction import extract_details
+from app.matching import score_job
+from app.models import AppSetting, CompanySource, Job, ScraperRun, SearchProfile, SourceSetting, db
+
+http_utils._MIN_SECONDS_BETWEEN_REQUESTS_PER_HOST = 0
+
+
+class FakeResponse:
+    def __init__(self, status=200, text="", json_data=None, content_type="text/html; charset=utf-8"):
+        self.status_code = status
+        self._json = json_data
+        self.text = text if json_data is None else json.dumps(json_data)
+        self.content = self.text.encode("utf-8")
+        self.headers = {"Content-Type": "application/json" if json_data is not None else content_type}
+        self.encoding = "utf-8"
+        self.apparent_encoding = "utf-8"
+
+    def json(self):
+        if self._json is None:
+            raise ValueError("kein JSON")
+        return self._json
+
+
+BA_REFNR = "10000-1234567890-S"
+BA_SEARCH = {
+    "stellenangebote": [
+        {"refnr": BA_REFNR, "titel": "Mediengestalter/in Bild und Ton", "beruf": "Mediengestalter/in - Bild und Ton",
+         "arbeitgeber": "Beispiel Studios GmbH", "arbeitsort": {"ort": "Köln", "region": "Nordrhein-Westfalen"},
+         "aktuelleVeroeffentlichungsdatum": "2026-09-20"},
+        {"refnr": "10000-999-S", "titel": "Kreditorenbuchhalter (m/w/d)", "beruf": "Buchhalter/in",
+         "arbeitgeber": "Zahlen AG", "arbeitsort": {"ort": "Köln"}},
+    ]
+}
+BA_DETAIL = {
+    "stellenangebotsTitel": "Mediengestalter/in Bild und Ton",
+    "stellenangebotsBeschreibung": (
+        "Deine Aufgaben\n- Schnitt von TV-Beiträgen\n- Kamera bei Außendrehs\n"
+        "Dein Profil\n- Ausbildung als Mediengestalter\n- Premiere Pro\n"
+        "Bewerbung: Bitte sende Lebenslauf und Showreel an Frau Anna Schmidt, bewerbung@beispiel-studios.de"
+    ),
+}
+CREW_LIST = """<html><body>
+<a href="/de/jobs/">Alle Jobs</a>
+<a href="/de/jobs/12345_setrunner-fuer-kinofilm/">Setrunner (m/w/d) für Kinofilm – Drehtage im Oktober</a>
+<a href="/de/jobs/12346_catering/">Catering-Hilfe (m/w/d)</a>
+</body></html>"""
+CREW_DETAIL = """<html><body><h1>Setrunner (m/w/d)</h1><p>Ort: Hamburg. Drehtage im Oktober, Tagesgage.</p>
+<h3>Deine Aufgaben</h3><ul><li>Unterstützung am Set</li></ul></body></html>"""
+COMPANY_PAGE = """<html><body><nav><a href="/postproduktion">Postproduktion</a><a href="/kamera">Kamera</a></nav>
+<h2>Offene Stellen</h2>
+<a href="/karriere/video-editor">Video Editor (m/w/d)</a>
+<a href="/karriere/buchhaltung">Buchhaltung (m/w/d)</a></body></html>"""
+COMPANY_JOB = """<html><body><h1>Video Editor (m/w/d)</h1><p>Standort Köln-Ossendorf</p>
+<h3>Das bringst du mit</h3><ul><li>Avid oder Premiere</li><li>Gefühl für Timing</li></ul>
+<p>Ansprechpartner: Tom Becker, jobs@filmhaus-koeln.de</p></body></html>"""
+
+
+def fake_get(url, headers=None, params=None, timeout=None, **kwargs):
+    if url.endswith("/robots.txt"):
+        return FakeResponse(404)
+    if "rest.arbeitsagentur.de" in url and "/jobdetails/" in url:
+        assert url.endswith(base64.b64encode(BA_REFNR.encode()).decode())
+        assert headers.get("X-API-Key") == "jobboerse-jobsuche"
+        return FakeResponse(json_data=BA_DETAIL)
+    if "rest.arbeitsagentur.de" in url:
+        return FakeResponse(json_data=BA_SEARCH)
+    if url.rstrip("/").endswith("crew-united.com/de/jobs"):
+        return FakeResponse(text=CREW_LIST)
+    if "crew-united.com/de/jobs/12345" in url:
+        return FakeResponse(text=CREW_DETAIL)
+    if url == "https://filmhaus-koeln.de/karriere":
+        return FakeResponse(text=COMPANY_PAGE)
+    if url == "https://filmhaus-koeln.de/karriere/video-editor":
+        return FakeResponse(text=COMPANY_JOB)
+    if "indeed.com" in url:
+        return FakeResponse(403, text="Forbidden")
+    if "stepstone.de" in url:
+        raise requests.Timeout("read timed out")
+    return FakeResponse(404)
+
+
+class AppTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmp.name, "test.db")
+        self.app = create_app(database_uri=f"sqlite:///{self.db_path}")
+        self.app.config["UPLOAD_DIR"] = self.tmp.name
+        self.client = self.app.test_client()
+        self.ctx = self.app.app_context()
+        self.ctx.push()
+        http_utils._robots_cache.clear()
+
+    def tearDown(self):
+        db.session.remove()
+        db.engine.dispose()
+        self.ctx.pop()
+        self.tmp.cleanup()
+
+    def run_fetch(self):
+        from app.fetch_jobs import run_fetch_cycle
+
+        with mock.patch.object(http_utils.requests, "get", side_effect=fake_get):
+            return run_fetch_cycle(self.app)
+
+
+class MatchingTests(unittest.TestCase):
+    CASES = [
+        ("Kreditorenbuchhalter (m/w/d)", "Buchhaltung", "Köln", "raus"),
+        ("Runner (m/w/d) Restaurant", "Service im Restaurant, Kennenlernen per Video", "Köln", "raus"),
+        ("Produktionsleitung Metallbau", "Fertigung, Schnittstelle zum Vertrieb, Dreher", "Köln", "raus"),
+        ("Account Manager Software", "Vertrieb SaaS, Videocall", "Köln", "raus"),
+        ("Mediengestalter Digital und Print", "Printprodukte, Flyer", "Köln", "raus"),
+        ("Kameraassistent", "unbefristeter Vertrag", "München", "unpassend"),
+        ("Video Editor (m/w/d)", "Schnitt von Werbeclips", "Köln", "top"),
+        ("Mediengestalter/in Bild und Ton", "", "Köln, Nordrhein-Westfalen", "top"),
+        ("Runner (m/w/d)", "Unterstützung am Set bei TV-Serie, Drehtage im Oktober", "Hamburg", "top"),
+        ("Aufnahmeleitung (m/w/d)", "Kinofilm", "Frankfurt am Main", "top"),
+        ("Video Producer", "Corporate Videos für Kunden", "Frankfurt am Main", "unpassend"),
+        ("Editor (m/w/d)", "Videoschnitt in Premiere Pro und After Effects", "Hürth", "top"),
+        ("Setrunner", "Drehtage im März, Tagesgage", "Berlin", "top"),
+        ("Cutter", "Dokumentarfilm, Avid", "", "pruefen"),
+        ("Video Editor", "Postproduktion", "Remote", "top"),
+        ("Kameramann (m/w/d)", "Festanstellung", "Frankfurt (Oder)", "unpassend"),
+    ]
+
+    def test_cases(self):
+        for title, desc, loc, expected in self.CASES:
+            with self.subTest(title=title, location=loc):
+                score, label, _ = score_job(title, desc, loc)
+                self.assertEqual("raus" if score == 0 else label, expected)
+
+
+class ExtractionTests(unittest.TestCase):
+    def test_full_page(self):
+        page = """<nav>Kontakt Impressum</nav><h3>Deine Aufgaben</h3><ul><li>Schnitt</li></ul>
+        <h3>Dein Profil</h3><ul><li>Premiere Pro</li></ul><h3>Wir bieten</h3><ul><li>Obst</li></ul>
+        <p>Schick uns Lebenslauf und Showreel.</p>
+        <p>Ansprechpartnerin: Frau Julia Beispiel, julia.beispiel(at)filmfirma.de, Tel.: 0221 / 123 45 67</p>
+        <footer>info@filmfirma.de</footer>"""
+        d = extract_details(page, page_url="https://jobs.personio.de/x")
+        self.assertEqual(d["tasks"], "• Schnitt")
+        self.assertEqual(d["requirements"], "• Premiere Pro")
+        self.assertIn("Showreel", d["application_documents"])
+        self.assertEqual(d["contact_name"], "Julia Beispiel")
+        self.assertEqual(d["contact_email"], "julia.beispiel@filmfirma.de")
+        self.assertEqual(d["contact_phone"], "0221 / 123 45 67")
+        self.assertEqual(d["company_website"], "https://filmfirma.de")
+
+    def test_no_false_positives(self):
+        d = extract_details("<p>Kontakt: bei Fragen wende dich an uns.</p><p>Wir suchen Freelancer.</p>"
+                            "<p>Unternehmensprofil</p><footer>Kontakt Impressum Datenschutz</footer>")
+        self.assertEqual(d["contact_name"], "")
+        self.assertEqual(d["application_documents"], "")
+        self.assertEqual(d["requirements"], "")
+        self.assertEqual(d["confidence"], "unsicher")
+
+
+class FetchCycleTests(AppTestCase):
+    def test_full_cycle(self):
+        SourceSetting.query.filter_by(name="indeed").first().enabled = True
+        SourceSetting.query.filter_by(name="stepstone").first().enabled = True
+        SearchProfile.query.delete()
+        db.session.add(SearchProfile(keywords="Mediengestalter", location="Köln", radius_km=25))
+        db.session.add(SearchProfile(keywords="Video Editor", location="Köln", radius_km=25))
+        db.session.add(CompanySource(name="Filmhaus Köln", career_url="https://filmhaus-koeln.de/karriere"))
+        db.session.commit()
+
+        started = time.monotonic()
+        result = self.run_fetch()
+        self.assertLess(time.monotonic() - started, 10, "Blockierte Quellen duerfen den Lauf nicht aufhalten")
+
+        titles = {j.title: j for j in Job.query.all()}
+        self.assertIn("Mediengestalter/in Bild und Ton", titles)
+        self.assertNotIn("Kreditorenbuchhalter (m/w/d)", titles)
+        self.assertIn("Video Editor (m/w/d)", titles)
+        self.assertNotIn("Buchhaltung (m/w/d)", titles)
+        self.assertFalse(any("Catering" in t for t in titles))
+        self.assertFalse(any(t in ("Postproduktion", "Kamera") for t in titles), "Navigationslinks sind keine Jobs")
+
+        ba = titles["Mediengestalter/in Bild und Ton"]
+        self.assertEqual(ba.match_label, "top")
+        self.assertEqual(ba.source_ref, BA_REFNR)
+        self.assertEqual(ba.contact_name, "Anna Schmidt")
+        self.assertEqual(ba.contact_email, "bewerbung@beispiel-studios.de")
+        self.assertIn("Showreel", ba.application_documents)
+        self.assertIn("Schnitt von TV-Beiträgen", ba.tasks)
+
+        setrunner = next(j for t, j in titles.items() if t.startswith("Setrunner"))
+        self.assertEqual(setrunner.match_label, "top")
+
+        company_job = titles["Video Editor (m/w/d)"]
+        self.assertEqual(company_job.company, "Filmhaus Köln")
+        self.assertEqual(company_job.contact_email, "jobs@filmhaus-koeln.de")
+        self.assertEqual(company_job.company_website, "https://filmhaus-koeln.de")
+
+        kinds = {r.source: r.kind for r in ScraperRun.query.all()}
+        self.assertEqual(kinds["arbeitsagentur"], "ok")
+        self.assertEqual(kinds["crewunited"], "ok")
+        self.assertEqual(kinds["indeed"], "blocked")
+        self.assertEqual(kinds["stepstone"], "blocked")
+        self.assertEqual(kinds["firma:Filmhaus Köln"], "ok")
+        self.assertNotIn("adzuna", kinds, "Ohne Schluessel wird Adzuna uebersprungen")
+        self.assertEqual(result["new_jobs"], Job.query.count())
+
+        # Blockierte Quellen sind kein roter Banner
+        from app.status import broken_source_names
+
+        self.assertEqual(broken_source_names(), [])
+
+        # Zweiter Lauf legt nichts doppelt an
+        self.assertEqual(self.run_fetch()["new_jobs"], 0)
+
+    def test_error_banner_only_for_active_sources(self):
+        db.session.add(CompanySource(name="Kaputt GmbH", career_url="https://kaputt.example/karriere"))
+        db.session.commit()
+        def get(url, **kwargs):
+            if "kaputt.example" in url:
+                raise requests.ConnectionError("Name or service not known")
+            return fake_get(url, **kwargs)
+
+        with mock.patch.object(http_utils.requests, "get", side_effect=get):
+            from app.fetch_jobs import run_fetch_cycle
+
+            run_fetch_cycle(self.app)
+        from app.status import broken_source_names
+
+        self.assertIn("firma:Kaputt GmbH", broken_source_names())
+        company = CompanySource.query.filter_by(name="Kaputt GmbH").first()
+        self.client.post(f"/firmen/{company.id}/delete")
+        self.assertNotIn("firma:Kaputt GmbH", broken_source_names())
+
+
+class RouteTests(AppTestCase):
+    def test_pages_render(self):
+        for path in ["/", "/archiv", "/unterlagen", "/job/neu", "/firmen", "/einstellungen", "/status", "/status/text"]:
+            self.assertEqual(self.client.get(path).status_code, 200, path)
+
+    def test_cross_site_post_blocked(self):
+        r = self.client.post("/einstellungen/profil", data={"keywords": "x"}, headers={"Origin": "https://evil.example"})
+        self.assertEqual(r.status_code, 403)
+        r = self.client.post("/einstellungen/profil", data={"keywords": "Gaffer"}, headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(SearchProfile.query.filter_by(keywords="Gaffer").first())
+
+    def test_settings_keys_and_sources(self):
+        self.client.post("/einstellungen/schluessel", data={"adzuna_app_id": "id1", "adzuna_app_key": "k1"})
+        self.assertEqual(db.session.get(AppSetting, "adzuna_app_id").value, "id1")
+        self.client.post("/einstellungen/schluessel", data={"adzuna_app_id": ""})
+        self.assertEqual(db.session.get(AppSetting, "adzuna_app_id").value, "id1", "leeres Feld behaelt den Schluessel")
+        before = db.session.get(SourceSetting, "stepstone").enabled
+        self.client.post("/einstellungen/quelle/stepstone/toggle")
+        db.session.expire_all()
+        self.assertNotEqual(db.session.get(SourceSetting, "stepstone").enabled, before)
+
+    def test_manual_add_duplicate_and_status_flow(self):
+        data = {"mode": "manual", "title": "Kameraassistent (m/w/d)", "location": "Köln", "url": "https://x.example/job"}
+        self.client.post("/job/neu", data=data)
+        r = self.client.post("/job/neu", data=data)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(Job.query.count(), 1)
+        job = Job.query.first()
+        self.assertEqual(job.match_label, "top")
+
+        r = self.client.post(f"/job/{job.id}/status", json={"status": "vorbereitung"})
+        self.assertEqual(r.get_json(), {"ok": True, "status": "vorbereitung"})
+        r = self.client.post(f"/job/{job.id}/status", json={"status": "quatsch"})
+        self.assertFalse(r.get_json()["ok"])
+
+        self.client.post(f"/job/{job.id}/save", data={"cover_letter": "Hallo", "company_website": "javascript:alert(1)"})
+        db.session.expire_all()
+        self.assertEqual(job.cover_letter, "Hallo")
+        self.assertEqual(job.company_website, "", "nur http(s)-Links sind erlaubt")
+
+        self.client.post(f"/job/{job.id}/delete", json={})
+        db.session.expire_all()
+        self.assertEqual(job.status, "archiviert")
+        self.client.post(f"/job/{job.id}/purge")
+        self.assertEqual(Job.query.count(), 0)
+
+    def test_open_redirect_blocked(self):
+        self.client.post("/job/neu", data={"mode": "manual", "title": "Cutter"})
+        job = Job.query.first()
+        r = self.client.post(f"/job/{job.id}/status", data={"status": "neu", "next": "https://evil.example"})
+        self.assertNotIn("evil.example", r.headers["Location"])
+
+    def test_link_import(self):
+        page = """<html><head><title>x</title></head><body><script type="application/ld+json">
+        {"@type":"JobPosting","title":"Kameraassistent (m/w/d)","hiringOrganization":{"name":"Serien GmbH"},
+         "jobLocation":{"address":{"addressLocality":"Köln"}},"description":"&lt;h3&gt;Aufgaben&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;Schärfe ziehen&lt;/li&gt;&lt;/ul&gt;"}
+        </script></body></html>"""
+        with mock.patch.object(http_utils.requests, "get", return_value=FakeResponse(text=page)):
+            r = self.client.post("/job/neu", data={"mode": "link", "url": "https://www.linkedin.com/jobs/view/123"})
+        self.assertEqual(r.status_code, 302)
+        job = Job.query.first()
+        self.assertEqual(job.source, "linkedin")
+        self.assertEqual(job.company, "Serien GmbH")
+        self.assertEqual(job.url, "https://www.linkedin.com/jobs/view/123")
+        self.assertIn("Schärfe ziehen", job.tasks)
+
+    def test_document_upload_with_umlaut_name(self):
+        r = self.client.post("/unterlagen/upload", data={"doc_type": "lebenslauf", "file": (io.BytesIO(b"%PDF-1.4"), "Lebenslauf Götze.pdf")},
+                             content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 302)
+        from app.models import Document
+
+        doc = Document.query.first()
+        self.assertEqual(doc.filename, "Lebenslauf Götze.pdf")
+        response = self.client.get(f"/unterlagen/{doc.id}/download")
+        self.assertEqual(response.status_code, 200)
+        response.close()
+
+
+class MigrationTests(unittest.TestCase):
+    def test_old_schema_gets_new_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "old.db")
+            con = sqlite3.connect(path)
+            con.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, external_id VARCHAR(64) UNIQUE NOT NULL, "
+                        "title VARCHAR(300) NOT NULL, company VARCHAR(200), location VARCHAR(200), url VARCHAR(1000) NOT NULL, "
+                        "source VARCHAR(50) NOT NULL, salary VARCHAR(200), description TEXT, posted_at VARCHAR(50), "
+                        "fetched_at DATETIME, status VARCHAR(30), notes TEXT, cover_letter TEXT, updated_at DATETIME)")
+            con.execute("INSERT INTO jobs (external_id, title, location, url, source, status, cover_letter) "
+                        "VALUES ('a', 'Video Editor', 'Köln', 'https://x.example', 'indeed', 'beworben', 'Text')")
+            con.commit()
+            con.close()
+
+            app = create_app(database_uri=f"sqlite:///{path}")
+            with app.app_context():
+                job = Job.query.first()
+                self.assertEqual(job.cover_letter, "Text")
+                self.assertEqual(job.status, "beworben")
+                self.assertEqual(job.match_label, "top")
+                self.assertEqual(job.tasks, "")
+                self.assertEqual(app.test_client().get("/").status_code, 200)
+                db.session.remove()
+                db.engine.dispose()
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class OfflineTests(AppTestCase):
+    def test_offline_is_not_an_error(self):
+        from app.fetch_jobs import run_fetch_cycle
+        from app.status import broken_source_names
+
+        with mock.patch.object(http_utils.requests, "get", side_effect=requests.ConnectionError("Name or service not known")):
+            result = run_fetch_cycle(self.app)
+        self.assertTrue(result["offline"])
+        self.assertEqual(broken_source_names(), [])
+        runs = ScraperRun.query.filter_by(source="arbeitsagentur").all()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].kind, "offline")
+        self.assertIn("uebersprungen".replace("ue", "ü"), runs[0].message, "nach dem ersten Verbindungsfehler abbrechen")
+
+    def test_single_dead_source_is_an_error(self):
+        from app.fetch_jobs import run_fetch_cycle
+        from app.status import broken_source_names
+
+        def get(url, **kwargs):
+            if "crew-united" in url:
+                raise requests.ConnectionError("Name or service not known")
+            return fake_get(url, **kwargs)
+
+        with mock.patch.object(http_utils.requests, "get", side_effect=get):
+            result = run_fetch_cycle(self.app)
+        self.assertFalse(result["offline"])
+        self.assertEqual(broken_source_names(), ["crewunited"])

@@ -1,10 +1,8 @@
-"""Einzel-Import per Link: fuer JEDE Quelle (auch LinkedIn) nutzbar, weil hier
-genau eine Seite abgerufen wird, die der Nutzer selbst ausgewaehlt hat -
-kein automatisiertes Massen-Crawling. Liest zuerst JSON-LD JobPosting,
-faellt sonst auf Open-Graph-Metatags zurueck. Extrahiert zusaetzlich
-Ansprechpartner/Website/Voraussetzungen/Bewerbungsunterlagen aus derselben
-Seite (siehe app/extraction.py), ohne die Seite ein zweites Mal abzurufen.
-"""
+"""Einzel-Import per Link - fuer jede Quelle nutzbar (auch LinkedIn), weil
+genau eine Seite abgerufen wird, die der Nutzer selbst ausgewaehlt hat.
+Details (Aufgaben, Kontakt, ...) werden aus derselben Seite gelesen."""
+
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -13,18 +11,38 @@ from .base import JobListing, ScraperError
 from .http_utils import get
 from .jsonld import extract_jobpostings
 
+SOURCE_BY_DOMAIN = {
+    "linkedin": "linkedin",
+    "indeed": "indeed",
+    "stepstone": "stepstone",
+    "crew-united": "crewunited",
+    "arbeitsagentur": "arbeitsagentur",
+    "xing": "xing",
+}
+
+
+def guess_source(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    for key, source in SOURCE_BY_DOMAIN.items():
+        if key in host:
+            return source
+    return "link"
+
 
 def fetch_from_url(url: str, config: dict):
-    """Gibt (JobListing, details_dict) zurueck. details_dict hat dieselbe
-    Form wie app.extraction.extract_details()."""
-    # respect_robots=False: das ist ein einzelner, vom Nutzer ausgeloester Abruf
-    # genau einer selbst ausgewaehlten Seite (siehe http_utils.get), kein Crawling.
-    html = get(url, config, respect_robots=False)
-    details = extract_details(html)
+    """Gibt (JobListing, details) zurueck."""
+    if not url.lower().startswith(("http://", "https://")):
+        raise ScraperError("Bitte einen vollständigen Link angeben (beginnt mit https://).", kind="config")
 
-    listings = extract_jobpostings(html, source=_guess_source(url), fallback_url=url)
+    source = guess_source(url)
+    html = get(url, config, respect_robots=False)
+    details = extract_details(html, page_url=url)
+
+    listings = extract_jobpostings(html, source=source, fallback_url=url)
     if listings:
-        return listings[0], details
+        listing = listings[0]
+        listing.url = url
+        return listing, details
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -33,20 +51,14 @@ def fetch_from_url(url: str, config: dict):
         return tag.get("content", "").strip() if tag else ""
 
     title = meta("og:title") or (soup.title.string.strip() if soup.title and soup.title.string else "")
-    description = meta("og:description")
-
     if not title:
-        raise ScraperError(
-            f"Konnte keinen Titel aus {url} lesen. Bitte Titel/Firma manuell im Formular ergaenzen."
-        )
+        raise ScraperError("Aus dem Link ließ sich kein Titel lesen – bitte den Job unten manuell anlegen.")
 
-    listing = JobListing(title=title, url=url, source=_guess_source(url), description=description)
+    listing = JobListing(
+        title=title[:300],
+        url=url,
+        source=source,
+        company=meta("og:site_name") if source == "link" else "",
+        description=meta("og:description") or meta("description"),
+    )
     return listing, details
-
-
-def _guess_source(url: str) -> str:
-    lowered = url.lower()
-    for key in ("linkedin", "indeed", "stepstone", "crewunited", "crew-united"):
-        if key in lowered:
-            return "crewunited" if "crew" in key else key
-    return "manuell"

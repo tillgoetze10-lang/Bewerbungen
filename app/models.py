@@ -5,13 +5,18 @@ from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 
-# Reihenfolge = Spaltenreihenfolge im Scrum-Board (links -> rechts).
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+# Reihenfolge = Spaltenreihenfolge im Board (links -> rechts).
 STATUS_FLOW = [
     ("neu", "Neu"),
     ("interessant", "Interessant"),
     ("vorbereitung", "In Vorbereitung"),
     ("beworben", "Beworben"),
-    ("rueckmeldung", "Rueckmeldung erhalten"),
+    ("rueckmeldung", "Rückmeldung erhalten"),
 ]
 STATUS_ARCHIVIERT = "archiviert"
 STATUS_KEYS = [key for key, _ in STATUS_FLOW]
@@ -23,35 +28,38 @@ def make_external_id(url: str) -> str:
     return hashlib.sha256(url.strip().lower().encode("utf-8")).hexdigest()
 
 
+def is_web_url(value) -> bool:
+    return isinstance(value, str) and value.strip().lower().startswith(("http://", "https://"))
+
+
 class Job(db.Model):
     __tablename__ = "jobs"
 
     id = db.Column(db.Integer, primary_key=True)
     external_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
     title = db.Column(db.String(300), nullable=False)
-    company = db.Column(db.String(200))
-    location = db.Column(db.String(200))
+    company = db.Column(db.String(200), default="")
+    location = db.Column(db.String(200), default="")
     url = db.Column(db.String(1000), nullable=False)
-    source = db.Column(db.String(50), nullable=False)
-    salary = db.Column(db.String(200))
-    description = db.Column(db.Text)
-    posted_at = db.Column(db.String(50))
-    fetched_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    source = db.Column(db.String(100), nullable=False)
+    source_ref = db.Column(db.String(200), default="")  # z.B. Referenznummer der Arbeitsagentur
+    salary = db.Column(db.String(200), default="")
+    description = db.Column(db.Text, default="")
+    posted_at = db.Column(db.String(50), default="")
+    fetched_at = db.Column(db.DateTime, default=utcnow)
     status = db.Column(db.String(30), default="neu", index=True)
     notes = db.Column(db.Text, default="")
     cover_letter = db.Column(db.Text, default="")
-    updated_at = db.Column(
-        db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
-    )
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
 
-    # Automatische Ersteinschaetzung (siehe app/matching.py) - nur eine Empfehlung,
-    # loescht/versteckt nichts von selbst.
+    # Automatische Ersteinschaetzung (app/matching.py) - nur eine Empfehlung.
     match_score = db.Column(db.Float, default=0.0, index=True)
     match_label = db.Column(db.String(20), default="pruefen")
     match_reason = db.Column(db.Text, default="")
 
-    # Automatisch extrahierte Zusatzinfos (siehe app/extraction.py) - Best-Effort,
-    # daher immer mit Confidence-Einstufung und von Hand korrigierbar im UI.
+    # Automatisch extrahierte Zusatzinfos (app/extraction.py) - Best-Effort,
+    # daher mit Confidence-Einstufung und im UI korrigierbar.
+    tasks = db.Column(db.Text, default="")
     contact_name = db.Column(db.String(200), default="")
     contact_email = db.Column(db.String(200), default="")
     contact_phone = db.Column(db.String(100), default="")
@@ -59,11 +67,9 @@ class Job(db.Model):
     requirements = db.Column(db.Text, default="")
     application_documents = db.Column(db.Text, default="")
     extraction_confidence = db.Column(db.String(20), default="unsicher")
-    extraction_missing = db.Column(db.Text, default="")  # komma-getrennte Feldnamen, fuer Anzeige "bitte pruefen"
+    extraction_missing = db.Column(db.Text, default="")
 
-    documents = db.relationship(
-        "JobDocument", backref="job", cascade="all, delete-orphan", lazy="dynamic"
-    )
+    documents = db.relationship("JobDocument", backref="job", cascade="all, delete-orphan", lazy="dynamic")
 
     def status_label(self):
         return STATUS_LABELS.get(self.status, self.status)
@@ -71,7 +77,19 @@ class Job(db.Model):
     def match_label_text(self):
         from .matching import LABEL_TEXT
 
-        return LABEL_TEXT.get(self.match_label, self.match_label)
+        return LABEL_TEXT.get(self.match_label, self.match_label or "Prüfen")
+
+    def match_percent(self):
+        return int(round((self.match_score or 0) * 100))
+
+    def has_web_url(self):
+        return is_web_url(self.url)
+
+    def has_company_website(self):
+        return is_web_url(self.company_website)
+
+    def document_checklist(self):
+        return [d.strip() for d in (self.application_documents or "").split(",") if d.strip()]
 
     def missing_fields_labels(self):
         from .extraction import FIELD_LABELS
@@ -82,7 +100,7 @@ class Job(db.Model):
     def extraction_confidence_text(self):
         from .extraction import CONFIDENCE_LABELS
 
-        return CONFIDENCE_LABELS.get(self.extraction_confidence, self.extraction_confidence)
+        return CONFIDENCE_LABELS.get(self.extraction_confidence, self.extraction_confidence or "")
 
 
 class Document(db.Model):
@@ -95,12 +113,10 @@ class Document(db.Model):
     title = db.Column(db.String(200), nullable=False)
     filename = db.Column(db.String(300), nullable=False)
     stored_path = db.Column(db.String(500), nullable=False)
-    uploaded_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    uploaded_at = db.Column(db.DateTime, default=utcnow)
 
 
 class JobDocument(db.Model):
-    """Verknuepfung: welches Dokument gehoert zu welcher Bewerbung."""
-
     __tablename__ = "job_documents"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -111,8 +127,7 @@ class JobDocument(db.Model):
 
 
 class CompanySource(db.Model):
-    """Von dir hinterlegte Firmen-Karriereseiten, die beim Fetch-Lauf mit
-    durchsucht werden (zusaetzlich zu den Jobportalen)."""
+    """Hinterlegte Firmen-Karriereseiten, die bei jedem Suchlauf mit durchsucht werden."""
 
     __tablename__ = "company_sources"
 
@@ -120,23 +135,65 @@ class CompanySource(db.Model):
     name = db.Column(db.String(200), nullable=False)
     career_url = db.Column(db.String(1000), nullable=False)
     active = db.Column(db.Boolean, default=True)
-    added_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    added_at = db.Column(db.DateTime, default=utcnow)
     last_result = db.Column(db.String(300), default="")
+
+    @property
+    def source_key(self):
+        return f"firma:{self.name}"
+
+
+class SearchProfile(db.Model):
+    """Suchbegriff + Ort, im UI unter "Einstellungen" pflegbar (kein YAML noetig)."""
+
+    __tablename__ = "search_profiles"
+
+    id = db.Column(db.Integer, primary_key=True)
+    keywords = db.Column(db.String(200), nullable=False)
+    location = db.Column(db.String(200), default="")
+    radius_km = db.Column(db.Integer, default=25)
+    active = db.Column(db.Boolean, default=True)
+
+    def as_dict(self):
+        return {"keywords": self.keywords, "location": self.location or "", "radius_km": self.radius_km or 25}
+
+
+class SourceSetting(db.Model):
+    """An/Aus-Schalter je Jobportal, im UI pflegbar."""
+
+    __tablename__ = "source_settings"
+
+    name = db.Column(db.String(50), primary_key=True)
+    enabled = db.Column(db.Boolean, default=True)
+
+
+class AppSetting(db.Model):
+    """Frei belegbare Einstellungen, v.a. API-Schluessel (Adzuna, Jooble, SerpApi)."""
+
+    __tablename__ = "app_settings"
+
+    key = db.Column(db.String(80), primary_key=True)
+    value = db.Column(db.Text, default="")
+
+    @staticmethod
+    def as_dict():
+        return {s.key: s.value for s in AppSetting.query.all() if s.value}
 
 
 class ScraperRun(db.Model):
-    """Protokoll jedes Quellen-Abrufs (Portal oder Firma) bei jedem Fetch-Lauf.
+    """Protokoll jedes Quellen-Abrufs - treibt die Status-Seite und den Warn-Banner.
 
-    Zweck: der Nutzer soll NICHT selbst Terminal-Logs oder fluechtige
-    Flash-Meldungen lesen/verstehen muessen. Stattdessen zeigt die
-    Status-Seite (/status) einfach "funktioniert" / "kaputt seit wann,
-    warum" pro Quelle - dauerhaft, nicht nur direkt nach dem Klick."""
+    kind: "ok" | "blocked" (Seite laesst automatische Abfragen nicht zu - kein
+    Bug) | "config" (Einstellung fehlt) | "offline" (kein Internet) |
+    "error" (echter Fehler, den Claude beheben kann)
+    """
 
     __tablename__ = "scraper_runs"
 
     id = db.Column(db.Integer, primary_key=True)
-    ran_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    ran_at = db.Column(db.DateTime, default=utcnow, index=True)
     source = db.Column(db.String(100), nullable=False, index=True)
     ok = db.Column(db.Boolean, default=True)
+    kind = db.Column(db.String(20), default="ok")
     message = db.Column(db.Text, default="")
     new_jobs = db.Column(db.Integer, default=0)

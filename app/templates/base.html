@@ -4,76 +4,118 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>{% block title %}Bewerbungen{% endblock %}</title>
+  <title>{% block title %}Bewerbungen{% endblock %} · Bewerbungs-Board</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='8' width='20' height='16' rx='3' fill='%237c9bff'/%3E%3Cpath d='M23 13l6-3v12l-6-3z' fill='%237c9bff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body data-page="{{ request.endpoint }}">
   <header class="topbar">
     <a class="brand" href="{{ url_for('board.board') }}">Bewerbungs-Board</a>
 
     <nav class="nav-links">
-      <a href="{{ url_for('board.board') }}" class="{{ 'active' if request.endpoint == 'board.board' }}">Board</a>
-      <a href="{{ url_for('board.archive') }}" class="{{ 'active' if request.endpoint == 'board.archive' }}">Archiv</a>
-      <a href="{{ url_for('board.documents') }}" class="{{ 'active' if request.endpoint == 'board.documents' }}">Meine Unterlagen</a>
-      <a href="{{ url_for('board.companies') }}" class="{{ 'active' if request.endpoint == 'board.companies' }}">Firmen</a>
-      <a href="{{ url_for('board.status') }}" class="{{ 'active' if request.endpoint == 'board.status' }}">Status</a>
+      {% for endpoint, label in [('board.board', 'Board'), ('board.archive', 'Archiv'), ('board.documents', 'Meine Unterlagen'), ('board.companies', 'Firmen'), ('board.settings', 'Einstellungen'), ('board.status', 'Status')] %}
+      <a href="{{ url_for(endpoint) }}" class="{{ 'active' if request.endpoint == endpoint }}">{{ label }}</a>
+      {% endfor %}
     </nav>
 
     <div class="nav-actions">
-      <a class="btn-ghost" href="{{ url_for('board.add_job') }}">+ Job hinzufuegen</a>
-      <form action="{{ url_for('board.fetch_now') }}" method="post" onsubmit="return startFetchNow(this)">
-        <button type="submit" class="btn-primary">Jetzt nach neuen Jobs suchen</button>
+      <a class="btn-ghost" href="{{ url_for('board.add_job') }}">+ Job hinzufügen</a>
+      <form action="{{ url_for('board.fetch_now') }}" method="post">
+        <input type="hidden" name="next" value="{{ request.path }}">
+        <button type="submit" class="btn-primary" id="fetch-button" {% if fetch_state.running %}disabled{% endif %}>
+          {% if fetch_state.running %}Suche läuft …{% else %}Jetzt nach neuen Jobs suchen{% endif %}
+        </button>
       </form>
     </div>
   </header>
 
+  <div class="fetch-progress {% if not fetch_state.running %}hidden{% endif %}" id="fetch-progress" data-run-id="{{ fetch_state.run_id }}" data-running="{{ 'true' if fetch_state.running else 'false' }}">
+    <span class="spinner"></span>
+    <span id="fetch-step">{{ fetch_state.step or 'Suche läuft …' }}</span>
+  </div>
+
   {% if broken_sources %}
   <div class="broken-banner">
     <span>
-      <strong>{{ broken_sources|length }} Quelle(n) funktionieren gerade nicht</strong>
-      ({{ broken_sources|join(", ") }}) - kein Grund zur Sorge, einfach an Claude weiterleiten.
+      <strong>{{ broken_sources|length }} Quelle(n) mit Fehler:</strong>
+      {{ broken_sources|map('source_label')|join(', ') }}. Einfach an Claude weitergeben, verstehen musst du die Meldung nicht.
     </span>
     <button type="button" onclick="copyDiagnoseForClaude(this)">Für Claude kopieren</button>
   </div>
   {% endif %}
 
   <main>
+    <div class="flashes" id="flashes">
     {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        <div class="flashes">
-          {% for category, message in messages %}
-            <div class="flash flash-{{ category }}">{{ message }}</div>
-          {% endfor %}
-        </div>
-      {% endif %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
     {% endwith %}
+    </div>
     {% block content %}{% endblock %}
   </main>
 
   <script>
-    // Sichtbares Feedback beim Klick auf "Jetzt nach neuen Jobs suchen":
-    // der Lauf kann je nach Anzahl Quellen/Suchprofilen und Detail-Extraktion
-    // durchaus 30s-mehrere Minuten dauern - ohne diese Rueckmeldung sieht das
-    // aus wie "nichts passiert", obwohl im Hintergrund gesucht wird.
-    function startFetchNow(form) {
-      const btn = form.querySelector("button");
-      btn.disabled = true;
-      btn.textContent = "Suche läuft... (kann etwas dauern)";
-      return true; // Formular ganz normal absenden lassen
-    }
-
-    // Auf jeder Seite verfuegbar (Warn-Banner oben + Status-Seite): holt den
-    // Klartext-Diagnosebericht und legt ihn direkt in die Zwischenablage -
-    // danach reicht Einfuegen (Cmd+V) im Chat mit Claude.
     function copyDiagnoseForClaude(btn) {
       const originalText = btn.textContent;
       fetch("{{ url_for('board.status_text') }}")
         .then((r) => r.text())
         .then((text) => navigator.clipboard.writeText(text))
-        .then(() => { btn.textContent = "Kopiert! Jetzt in den Chat einfuegen (Cmd+V)"; })
-        .catch(() => { btn.textContent = "Kopieren fehlgeschlagen - bitte /status oeffnen"; })
+        .then(() => { btn.textContent = "Kopiert! Jetzt im Chat einfügen (Cmd+V)"; })
+        .catch(() => { btn.textContent = "Kopieren ging nicht – bitte Status-Seite öffnen"; })
         .finally(() => { setTimeout(() => { btn.textContent = originalText; }, 4000); });
     }
+
+    // Fortschritt der Hintergrund-Suche anzeigen und am Ende neue Jobs einblenden.
+    (function () {
+      const bar = document.getElementById("fetch-progress");
+      const step = document.getElementById("fetch-step");
+      const button = document.getElementById("fetch-button");
+      let watching = bar.dataset.running === "true";
+
+      function showFlash(text, category) {
+        const flash = document.createElement("div");
+        flash.className = "flash flash-" + category;
+        flash.textContent = text;
+        document.getElementById("flashes").prepend(flash);
+      }
+
+      function poll() {
+        fetch("{{ url_for('board.fetch_status') }}")
+          .then((r) => r.json())
+          .then((s) => {
+            if (s.running) {
+              bar.classList.remove("hidden");
+              step.textContent = s.step || "Suche läuft …";
+              button.disabled = true;
+              button.textContent = "Suche läuft …";
+              watching = true;
+              setTimeout(poll, 2500);
+              return;
+            }
+            bar.classList.add("hidden");
+            button.disabled = false;
+            button.textContent = "Jetzt nach neuen Jobs suchen";
+            if (watching && s.summary) {
+              const onBoard = document.body.dataset.page === "board.board";
+              if (s.new_jobs > 0 && onBoard) {
+                window.location.reload();
+              } else {
+                showFlash(s.summary, s.new_jobs > 0 ? "success" : "info");
+              }
+            }
+            watching = false;
+          })
+          .catch(() => setTimeout(poll, 5000));
+      }
+
+      if (watching) setTimeout(poll, 1500);
+      // Auch Laeufe mitbekommen, die der Scheduler im Hintergrund startet.
+      setInterval(() => { if (!watching) {
+        fetch("{{ url_for('board.fetch_status') }}").then((r) => r.json()).then((s) => { if (s.running) { watching = true; poll(); } });
+      } }, 15000);
+    })();
   </script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>
