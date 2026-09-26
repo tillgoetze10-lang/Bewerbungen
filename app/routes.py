@@ -5,6 +5,7 @@ from flask import (
     Blueprint,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -13,6 +14,8 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+from .config import load_config
+from .extraction import EMPTY_RESULT, fetch_and_extract_details
 from .fetch_jobs import run_fetch_cycle
 from .matching import score_job
 from .models import (
@@ -55,10 +58,16 @@ def archive():
 @bp.route("/job/<int:job_id>/status", methods=["POST"])
 def update_status(job_id):
     job = Job.query.get_or_404(job_id)
-    new_status = request.form.get("status")
-    if new_status in STATUS_KEYS + [STATUS_ARCHIVIERT]:
+    data = request.get_json(silent=True) or request.form
+    new_status = data.get("status")
+    ok = new_status in STATUS_KEYS + [STATUS_ARCHIVIERT]
+    if ok:
         job.status = new_status
         db.session.commit()
+
+    if request.is_json:
+        return jsonify({"ok": ok, "status": job.status})
+
     next_url = request.form.get("next") or url_for("board.board")
     return redirect(next_url)
 
@@ -104,8 +113,42 @@ def save_job(job_id):
     job = Job.query.get_or_404(job_id)
     job.cover_letter = request.form.get("cover_letter", "")
     job.notes = request.form.get("notes", "")
+    job.contact_name = request.form.get("contact_name", "")
+    job.contact_email = request.form.get("contact_email", "")
+    job.contact_phone = request.form.get("contact_phone", "")
+    job.company_website = request.form.get("company_website", "")
+    job.requirements = request.form.get("requirements", "")
+    job.application_documents = request.form.get("application_documents", "")
     db.session.commit()
     flash("Gespeichert.", "success")
+    return redirect(url_for("board.job_detail", job_id=job.id))
+
+
+@bp.route("/job/<int:job_id>/reextract", methods=["POST"])
+def reextract_job(job_id):
+    """Ruft die Original-Anzeige erneut ab und aktualisiert Ansprechpartner/
+    Website/Voraussetzungen/Bewerbungsunterlagen - falls sich die Anzeige
+    geaendert hat oder die erste Extraktion nichts fand."""
+    job = Job.query.get_or_404(job_id)
+    details = fetch_and_extract_details(job.url, load_config())
+    if not details:
+        flash(
+            "Anzeige konnte nicht erneut abgerufen werden (Link tot, Bot-Schutz "
+            "oder robots.txt untersagt es). Bitte Felder manuell pruefen.",
+            "error",
+        )
+        return redirect(url_for("board.job_detail", job_id=job.id))
+
+    job.contact_name = details["contact_name"] or job.contact_name
+    job.contact_email = details["contact_email"] or job.contact_email
+    job.contact_phone = details["contact_phone"] or job.contact_phone
+    job.company_website = details["company_website"] or job.company_website
+    job.requirements = details["requirements"] or job.requirements
+    job.application_documents = details["application_documents"] or job.application_documents
+    job.extraction_confidence = details["confidence"]
+    job.extraction_missing = ",".join(details["missing_fields"])
+    db.session.commit()
+    flash(f"Neu extrahiert: {job.extraction_confidence_text()}.", "info")
     return redirect(url_for("board.job_detail", job_id=job.id))
 
 
@@ -200,9 +243,7 @@ def add_job():
             flash("Bitte einen Link angeben.", "error")
             return redirect(url_for("board.add_job"))
         try:
-            from .config import load_config
-
-            listing = fetch_from_url(url, load_config())
+            listing, details = fetch_from_url(url, load_config())
         except ScraperError as exc:
             flash(str(exc), "error")
             return redirect(url_for("board.add_job"))
@@ -228,6 +269,14 @@ def add_job():
             match_score=score,
             match_label=label,
             match_reason=reason,
+            contact_name=details["contact_name"],
+            contact_email=details["contact_email"],
+            contact_phone=details["contact_phone"],
+            company_website=details["company_website"],
+            requirements=details["requirements"],
+            application_documents=details["application_documents"],
+            extraction_confidence=details["confidence"],
+            extraction_missing=",".join(details["missing_fields"]),
         )
         db.session.add(job)
         db.session.commit()

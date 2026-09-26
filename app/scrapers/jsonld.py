@@ -48,6 +48,26 @@ def extract_jobpostings(html: str, source: str, fallback_url: str = ""):
     return results
 
 
+def extract_raw_jobposting_node(html: str):
+    """Gibt den ersten rohen JobPosting-JSON-LD-Knoten zurueck (oder None).
+    Wird von app/extraction.py genutzt, um Felder zu lesen, die
+    _jobposting_to_listing nicht ins normalisierte JobListing uebernimmt
+    (Anforderungen, Organisations-Website, ...)."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all("script", type="application/ld+json"):
+        raw = tag.string or tag.get_text()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for node in _flatten(data):
+            if isinstance(node, dict) and node.get("@type") in ("JobPosting", ["JobPosting"]):
+                return node
+    return None
+
+
 def _jobposting_to_listing(node: dict, source: str, fallback_url: str) -> JobListing:
     title = node.get("title") or ""
     url = node.get("url") or fallback_url

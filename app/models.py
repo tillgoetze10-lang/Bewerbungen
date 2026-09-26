@@ -50,6 +50,17 @@ class Job(db.Model):
     match_label = db.Column(db.String(20), default="pruefen")
     match_reason = db.Column(db.Text, default="")
 
+    # Automatisch extrahierte Zusatzinfos (siehe app/extraction.py) - Best-Effort,
+    # daher immer mit Confidence-Einstufung und von Hand korrigierbar im UI.
+    contact_name = db.Column(db.String(200), default="")
+    contact_email = db.Column(db.String(200), default="")
+    contact_phone = db.Column(db.String(100), default="")
+    company_website = db.Column(db.String(500), default="")
+    requirements = db.Column(db.Text, default="")
+    application_documents = db.Column(db.Text, default="")
+    extraction_confidence = db.Column(db.String(20), default="unsicher")
+    extraction_missing = db.Column(db.Text, default="")  # komma-getrennte Feldnamen, fuer Anzeige "bitte pruefen"
+
     documents = db.relationship(
         "JobDocument", backref="job", cascade="all, delete-orphan", lazy="dynamic"
     )
@@ -61,6 +72,17 @@ class Job(db.Model):
         from .matching import LABEL_TEXT
 
         return LABEL_TEXT.get(self.match_label, self.match_label)
+
+    def missing_fields_labels(self):
+        from .extraction import FIELD_LABELS
+
+        keys = [k for k in (self.extraction_missing or "").split(",") if k]
+        return [FIELD_LABELS.get(k, k) for k in keys]
+
+    def extraction_confidence_text(self):
+        from .extraction import CONFIDENCE_LABELS
+
+        return CONFIDENCE_LABELS.get(self.extraction_confidence, self.extraction_confidence)
 
 
 class Document(db.Model):

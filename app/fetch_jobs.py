@@ -12,6 +12,7 @@ import logging
 import sys
 
 from .config import load_config, source_enabled
+from .extraction import EMPTY_RESULT, fetch_and_extract_details
 from .matching import score_job, score_title
 from .models import CompanySource, Job, db, make_external_id
 from .scrapers import REGISTRY
@@ -21,7 +22,7 @@ from .scrapers.company_generic import search_company
 logger = logging.getLogger(__name__)
 
 
-def _store_listing(listing) -> bool:
+def _store_listing(listing, config) -> bool:
     """Legt einen Job an, falls er neu und (mindestens etwas) passend ist.
     Gibt True zurueck, wenn ein neuer Job angelegt wurde."""
     if not listing.is_valid():
@@ -37,6 +38,11 @@ def _store_listing(listing) -> bool:
 
     score, label, reason = score_job(listing.title, listing.description, listing.location)
 
+    details = None
+    if config.get("fetch_job_details", True):
+        details = fetch_and_extract_details(listing.url, config)
+    details = details or EMPTY_RESULT
+
     job = Job(
         external_id=ext_id,
         title=listing.title,
@@ -51,6 +57,14 @@ def _store_listing(listing) -> bool:
         match_score=score,
         match_label=label,
         match_reason=reason,
+        contact_name=details["contact_name"],
+        contact_email=details["contact_email"],
+        contact_phone=details["contact_phone"],
+        company_website=details["company_website"],
+        requirements=details["requirements"],
+        application_documents=details["application_documents"],
+        extraction_confidence=details["confidence"],
+        extraction_missing=",".join(details["missing_fields"]),
     )
     db.session.add(job)
     return True
@@ -84,7 +98,7 @@ def run_fetch_cycle(app):
                         continue
 
                     for listing in listings:
-                        if _store_listing(listing):
+                        if _store_listing(listing, config):
                             new_jobs += 1
 
         for company in CompanySource.query.filter_by(active=True).all():
@@ -103,7 +117,7 @@ def run_fetch_cycle(app):
 
             found = 0
             for listing in listings:
-                if _store_listing(listing):
+                if _store_listing(listing, config):
                     found += 1
                     new_jobs += 1
             company.last_result = f"{len(listings)} passende Treffer, {found} davon neu."

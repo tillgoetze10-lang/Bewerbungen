@@ -1,19 +1,21 @@
 {% extends "base.html" %}
 {% block title %}{{ job.title }}{% endblock %}
 {% block content %}
-<a href="{{ url_for('board.board') }}">&larr; zurueck zum Board</a>
+<a class="back-link" href="{{ url_for('board.board') }}">&larr; zurueck zum Board</a>
 
-<h1>{{ job.title }}</h1>
-<p class="card-meta">
-  {{ job.company or "Unbekannte Firma" }}{% if job.location %} &middot; {{ job.location }}{% endif %}
-  &middot; Quelle: {{ job.source }}
-  {% if job.salary %}&middot; {{ job.salary }}{% endif %}
-</p>
-<p><a href="{{ job.url }}" target="_blank" rel="noopener">Original-Anzeige oeffnen</a></p>
-
-<div class="match-box badge-{{ job.match_label }}">
-  <strong>Automatische Einschaetzung: {{ job.match_label_text() }} ({{ (job.match_score * 100)|round|int }}%)</strong>
-  <p>{{ job.match_reason }}</p>
+<div class="detail-header">
+  <h1>{{ job.title }}</h1>
+  <p class="card-meta">
+    {{ job.company or "Unbekannte Firma" }}{% if job.location %} &middot; {{ job.location }}{% endif %}
+    &middot; Quelle: {{ job.source }}
+    {% if job.salary %}&middot; {{ job.salary }}{% endif %}
+  </p>
+  <div class="link-row">
+    <a class="btn-link" href="{{ job.url }}" target="_blank" rel="noopener">Original-Anzeige &#8599;</a>
+    {% if job.company_website %}
+    <a class="btn-link" href="{{ job.company_website }}" target="_blank" rel="noopener">Firmen-Website &#8599;</a>
+    {% endif %}
+  </div>
 </div>
 
 <form action="{{ url_for('board.update_status', job_id=job.id) }}" method="post" class="inline-form">
@@ -28,12 +30,46 @@
   </label>
 </form>
 
+<div class="match-box badge-{{ job.match_label }}">
+  <strong>Automatische Einschaetzung: {{ job.match_label_text() }} ({{ (job.match_score * 100)|round|int }}%)</strong>
+  <p>{{ job.match_reason }}</p>
+</div>
+
+<div class="extract-box confidence-{{ job.extraction_confidence }}">
+  <div class="extract-head">
+    <strong>Extraktion: {{ job.extraction_confidence_text() }}</strong>
+    <form action="{{ url_for('board.reextract_job', job_id=job.id) }}" method="post" class="inline-form">
+      <button type="submit" class="small">Erneut extrahieren</button>
+    </form>
+  </div>
+  {% set missing = job.missing_fields_labels() %}
+  {% if missing %}
+  <p class="hint">Nicht automatisch gefunden, bitte pruefen/ergaenzen: {{ missing|join(", ") }}.</p>
+  {% endif %}
+</div>
+
 {% if job.description %}
 <h3>Stellenbeschreibung</h3>
 <p class="description">{{ job.description }}</p>
 {% endif %}
 
 <form action="{{ url_for('board.save_job', job_id=job.id) }}" method="post" class="stack">
+  <h3>Ansprechpartner</h3>
+  <div class="grid-3">
+    <label>Name <input type="text" name="contact_name" value="{{ job.contact_name }}" placeholder="nicht gefunden"></label>
+    <label>E-Mail <input type="email" name="contact_email" value="{{ job.contact_email }}" placeholder="nicht gefunden"></label>
+    <label>Telefon <input type="text" name="contact_phone" value="{{ job.contact_phone }}" placeholder="nicht gefunden"></label>
+  </div>
+
+  <h3>Firmen-Website</h3>
+  <input type="url" name="company_website" value="{{ job.company_website }}" placeholder="nicht gefunden">
+
+  <h3>Voraussetzungen</h3>
+  <textarea name="requirements" rows="6" placeholder="Automatisch nichts gefunden - bitte aus der Anzeige ergaenzen.">{{ job.requirements }}</textarea>
+
+  <h3>Einzureichende Bewerbungsunterlagen</h3>
+  <textarea name="application_documents" rows="3" placeholder="Automatisch nichts gefunden - bitte aus der Anzeige ergaenzen.">{{ job.application_documents }}</textarea>
+
   <h3>Anschreiben</h3>
   <textarea name="cover_letter" rows="14" placeholder="Anschreiben fuer diese Bewerbung...">{{ job.cover_letter }}</textarea>
 

@@ -15,6 +15,35 @@ vorzubereiten (Anschreiben, Lebenslauf, Notizen - alles an einem Ort).
 - **Schnell hinzufuegen (Link):** einzelnen Job-Link einfuegen (z.B. von LinkedIn), das Tool liest Titel/Firma/Beschreibung selbst aus.
 - **Firmen-Karriereseiten (`/firmen`):** eigene Firmen (Produktionsfirmen, Agenturen, Sender...) mit Link zur Karriereseite hinterlegen. Der Button "Jetzt nach neuen Jobs suchen" durchsucht dann Jobportale **und** alle hinterlegten Firmenseiten in einem Durchgang.
 - **Automatische Ersteinschaetzung:** jeder gefundene Job wird direkt nach Berufsbild + Standort-Strategie bewertet (Top-Treffer / Pruefen / Eher unpassend) - siehe naechster Abschnitt.
+- **Automatische Detail-Extraktion:** Ansprechpartner (Name/E-Mail/Telefon), Firmen-Website, Voraussetzungen und geforderte Bewerbungsunterlagen werden direkt aus der Anzeige gezogen - inkl. ehrlicher Anzeige, was NICHT gefunden wurde (siehe naechster Abschnitt).
+- **Drag & Drop:** Karten lassen sich im Board direkt zwischen den Spalten verschieben (per Maus), alternativ geht's weiterhin per Dropdown auf der Karte.
+
+## Automatische Detail-Extraktion (Ansprechpartner, Voraussetzungen, Unterlagen)
+
+Fuer jeden neu gefundenen Job ruft das Tool zusaetzlich die einzelne
+Anzeigen-Seite ab (`app/extraction.py`) und versucht daraus zu lesen:
+
+- **Ansprechpartner** (Name, E-Mail, Telefon) - per Muster wie "Ansprechpartner:", "Kontakt:" + E-Mail-/Telefon-Regex
+- **Firmen-Website** - aus schema.org-Daten, falls die Seite `hiringOrganization.url`/`sameAs` ausliefert
+- **Voraussetzungen** - aus schema.org-Feldern (`qualifications`, `skills`, ...) oder, falls nicht vorhanden, aus dem Textabschnitt unter Ueberschriften wie "Dein Profil"/"Anforderungen"
+- **Geforderte Bewerbungsunterlagen** - Abgleich gegen Stichwoerter (Anschreiben, Lebenslauf, Zeugnisse, Arbeitsproben/Portfolio, Gehaltsvorstellung, Eintrittstermin)
+
+**Das ist Text-Heuristik, kein Verstehen der Anzeige - und wird nie 100%
+treffen.** Deshalb "beobachtet" das Tool sich dabei selbst so ehrlich wie
+moeglich, statt falsche Sicherheit vorzutaeuschen:
+
+- Jeder Job bekommt eine **Confidence-Einstufung** (Vollstaendig / Teilweise / Unsicher), sichtbar als farbige Box auf der Detailseite.
+- Felder, die NICHT automatisch gefunden wurden, werden explizit aufgelistet ("bitte pruefen/ergaenzen").
+- Alle Felder sind direkt im UI von Hand korrigierbar (kein Datenbank-Zugriff noetig).
+- Button "Erneut extrahieren" auf der Detailseite ruft die Anzeige nochmal ab, falls sie sich geaendert hat oder die erste Extraktion nichts fand.
+
+Anpassen/erweitern (z.B. weitere Kontakt-Phrasen oder Unterlagen-Stichwoerter): `app/extraction.py`.
+
+Neue Job-Detailabrufe bedeuten mehr Requests pro Fetch-Lauf (ein zusaetzlicher
+Abruf pro neu gefundenem, passendem Job - nicht pro Suchergebnis). Falls das
+bei einer Quelle zu Bot-Schutz fuehrt, in `config.yaml` global abschalten:
+`fetch_job_details: false` (dann bleiben Titel/Ort/Firma/Beschreibung wie
+gehabt, aber ohne die Zusatzfelder).
 
 ## Automatische Bewertung (Berufsbild + Standort)
 

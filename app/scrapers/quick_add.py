@@ -1,24 +1,30 @@
 """Einzel-Import per Link: fuer JEDE Quelle (auch LinkedIn) nutzbar, weil hier
 genau eine Seite abgerufen wird, die der Nutzer selbst ausgewaehlt hat -
 kein automatisiertes Massen-Crawling. Liest zuerst JSON-LD JobPosting,
-faellt sonst auf Open-Graph-Metatags zurueck.
+faellt sonst auf Open-Graph-Metatags zurueck. Extrahiert zusaetzlich
+Ansprechpartner/Website/Voraussetzungen/Bewerbungsunterlagen aus derselben
+Seite (siehe app/extraction.py), ohne die Seite ein zweites Mal abzurufen.
 """
 
 from bs4 import BeautifulSoup
 
+from ..extraction import extract_details
 from .base import JobListing, ScraperError
 from .http_utils import get
 from .jsonld import extract_jobpostings
 
 
-def fetch_from_url(url: str, config: dict) -> JobListing:
+def fetch_from_url(url: str, config: dict):
+    """Gibt (JobListing, details_dict) zurueck. details_dict hat dieselbe
+    Form wie app.extraction.extract_details()."""
     # respect_robots=False: das ist ein einzelner, vom Nutzer ausgeloester Abruf
     # genau einer selbst ausgewaehlten Seite (siehe http_utils.get), kein Crawling.
     html = get(url, config, respect_robots=False)
+    details = extract_details(html)
 
     listings = extract_jobpostings(html, source=_guess_source(url), fallback_url=url)
     if listings:
-        return listings[0]
+        return listings[0], details
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -34,12 +40,8 @@ def fetch_from_url(url: str, config: dict) -> JobListing:
             f"Konnte keinen Titel aus {url} lesen. Bitte Titel/Firma manuell im Formular ergaenzen."
         )
 
-    return JobListing(
-        title=title,
-        url=url,
-        source=_guess_source(url),
-        description=description,
-    )
+    listing = JobListing(title=title, url=url, source=_guess_source(url), description=description)
+    return listing, details
 
 
 def _guess_source(url: str) -> str:
