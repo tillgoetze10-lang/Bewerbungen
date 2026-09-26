@@ -29,4 +29,16 @@ def create_app():
 
     app.register_blueprint(bp)
 
+    @app.context_processor
+    def inject_broken_sources():
+        # Auf jeder Seite verfuegbar, damit der Warn-Banner in base.html
+        # ueberall auftaucht, wenn eine Quelle gerade kaputt ist - nicht
+        # nur auf /status.
+        from .status import broken_source_names
+
+        try:
+            return {"broken_sources": broken_source_names()}
+        except Exception:
+            return {"broken_sources": []}
+
     return app

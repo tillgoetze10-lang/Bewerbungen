@@ -27,6 +27,16 @@
     </div>
   </header>
 
+  {% if broken_sources %}
+  <div class="broken-banner">
+    <span>
+      <strong>{{ broken_sources|length }} Quelle(n) funktionieren gerade nicht</strong>
+      ({{ broken_sources|join(", ") }}) - kein Grund zur Sorge, einfach an Claude weiterleiten.
+    </span>
+    <button type="button" onclick="copyDiagnoseForClaude(this)">Für Claude kopieren</button>
+  </div>
+  {% endif %}
+
   <main>
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -39,5 +49,20 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
+
+  <script>
+    // Auf jeder Seite verfuegbar (Warn-Banner oben + Status-Seite): holt den
+    // Klartext-Diagnosebericht und legt ihn direkt in die Zwischenablage -
+    // danach reicht Einfuegen (Cmd+V) im Chat mit Claude.
+    function copyDiagnoseForClaude(btn) {
+      const originalText = btn.textContent;
+      fetch("{{ url_for('board.status_text') }}")
+        .then((r) => r.text())
+        .then((text) => navigator.clipboard.writeText(text))
+        .then(() => { btn.textContent = "Kopiert! Jetzt in den Chat einfuegen (Cmd+V)"; })
+        .catch(() => { btn.textContent = "Kopieren fehlgeschlagen - bitte /status oeffnen"; })
+        .finally(() => { setTimeout(() => { btn.textContent = originalText; }, 4000); });
+    }
+  </script>
 </body>
 </html>

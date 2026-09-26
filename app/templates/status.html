@@ -33,26 +33,6 @@
 </table>
 
 <h3>Fuer Claude zum Kopieren</h3>
-<p class="hint">Falls etwas nicht funktioniert: Text unten kopieren und einfach in den Chat einfuegen.</p>
-<textarea id="diagnose-text" rows="10" readonly style="width: 100%; max-width: 700px;">Wird geladen...</textarea>
-<div class="inline-form" style="margin-top: 0.5rem;">
-  <button type="button" onclick="copyDiagnose()">Text kopieren</button>
-  <span id="copy-hint" class="hint"></span>
-</div>
-
-<script>
-  fetch("{{ url_for('board.status_text') }}")
-    .then((r) => r.text())
-    .then((text) => { document.getElementById("diagnose-text").value = text; });
-
-  function copyDiagnose() {
-    const el = document.getElementById("diagnose-text");
-    el.select();
-    navigator.clipboard.writeText(el.value).then(() => {
-      document.getElementById("copy-hint").textContent = "Kopiert!";
-    }).catch(() => {
-      document.getElementById("copy-hint").textContent = "Bitte manuell markieren und kopieren (Cmd+C).";
-    });
-  }
-</script>
+<p class="hint">Ein Klick kopiert den kompletten Diagnosebericht in die Zwischenablage - danach einfach im Chat mit Claude einfuegen (Cmd+V).</p>
+<button type="button" onclick="copyDiagnoseForClaude(this)">Für Claude kopieren</button>
 {% endblock %}

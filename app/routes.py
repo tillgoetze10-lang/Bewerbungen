@@ -26,12 +26,12 @@ from .models import (
     Document,
     Job,
     JobDocument,
-    ScraperRun,
     db,
     make_external_id,
 )
 from .scrapers.base import ScraperError
 from .scrapers.quick_add import fetch_from_url
+from .status import latest_run_per_source
 
 bp = Blueprint("board", __name__)
 
@@ -372,18 +372,9 @@ def fetch_now():
 # ---- Status: dauerhaftes Protokoll statt fluechtiger Flash-Meldungen ----
 
 
-def _latest_run_per_source():
-    """Neuester ScraperRun je Quelle, neueste zuerst nach Quellenname sortiert."""
-    latest = {}
-    for run in ScraperRun.query.order_by(ScraperRun.ran_at.desc()).all():
-        if run.source not in latest:
-            latest[run.source] = run
-    return dict(sorted(latest.items()))
-
-
 @bp.route("/status")
 def status():
-    latest = _latest_run_per_source()
+    latest = latest_run_per_source()
     broken = [s for s, r in latest.items() if not r.ok]
     return render_template("status.html", latest=latest, broken=broken)
 
@@ -394,7 +385,7 @@ def status_text():
     eine Quelle nicht funktioniert, dann muss niemand die Meldungen selbst
     verstehen."""
     lines = ["Bewerbungs-Board - Quellen-Status", "=" * 34, ""]
-    latest = _latest_run_per_source()
+    latest = latest_run_per_source()
     if not latest:
         lines.append("Noch kein Fetch-Lauf protokolliert. Einmal 'Jetzt nach neuen Jobs suchen' klicken.")
     for source, run in latest.items():
