@@ -386,3 +386,94 @@ class OfflineTests(AppTestCase):
             result = run_fetch_cycle(self.app)
         self.assertFalse(result["offline"])
         self.assertEqual(broken_source_names(), ["crewunited"])
+
+
+class WorkflowTests(AppTestCase):
+    def _job(self, **kwargs):
+        from app.fetch_jobs import job_from_listing
+        from app.scrapers.base import JobListing
+
+        listing = JobListing(title=kwargs.pop("title", "Kameraassistent (m/w/d)"), url="https://x.example/j1",
+                             source=kwargs.pop("source", "arbeitsagentur"), company="Serienwerk GmbH", location="Köln")
+        job = job_from_listing(listing, None, 1.0, "top", "")
+        for key, value in kwargs.items():
+            setattr(job, key, value)
+        db.session.add(job)
+        db.session.commit()
+        return job
+
+    def test_cover_letter_template_is_filled(self):
+        from app.letters import fill_template
+
+        job = self._job(contact_name="Anna Schmidt", contact_salutation="Frau")
+        text = fill_template("{anrede}\n{anrede_du}\nBewerbung als {stelle} bei {firma} {quelle}.", job)
+        self.assertIn("Sehr geehrte Frau Schmidt,", text)
+        self.assertIn("Hallo Anna,", text)
+        self.assertIn("Bewerbung als Kameraassistent bei Serienwerk GmbH in der Jobbörse", text, "(m/w/d) entfernt")
+        job.contact_name, job.contact_salutation = "", ""
+        self.assertIn("Sehr geehrte Damen und Herren,", fill_template("{anrede}", job))
+
+        page = self.client.get(f"/job/{job.id}").get_data(as_text=True)
+        self.assertIn("Vorlage einfügen", page, "Standard-Vorlage wird beim Start angelegt")
+
+    def test_applied_sets_follow_up_and_checklist(self):
+        from datetime import date, timedelta
+
+        job = self._job(application_documents="Lebenslauf, Showreel / Arbeitsproben")
+        self.client.post(f"/job/{job.id}/save", data={"docs_checklist_present": "1", "docs_done": ["Lebenslauf", "Erfunden"]})
+        db.session.expire_all()
+        self.assertEqual(job.docs_done_list(), ["Lebenslauf"])
+        self.assertEqual(job.docs_progress(), (1, 2))
+
+        self.client.post(f"/job/{job.id}/status", json={"status": "beworben"})
+        db.session.expire_all()
+        self.assertEqual(job.applied_at, date.today())
+        self.assertEqual(job.follow_up_at, date.today() + timedelta(days=14))
+        self.assertFalse(job.follow_up_due())
+
+        job.follow_up_at = date.today() - timedelta(days=1)
+        db.session.commit()
+        self.assertIn("Nachfassen fällig", self.client.get("/").get_data(as_text=True))
+        self.client.post(f"/job/{job.id}/nachgefasst")
+        db.session.expire_all()
+        self.assertIsNone(job.follow_up_at)
+        self.assertIn("nachgefasst", job.notes)
+
+    def test_deadline_state(self):
+        from datetime import date, timedelta
+
+        job = self._job(deadline=date.today() + timedelta(days=3))
+        self.assertEqual(job.deadline_state(), "bald")
+        job.deadline = date.today() - timedelta(days=1)
+        self.assertEqual(job.deadline_state(), "abgelaufen")
+        job.status = "beworben"
+        self.assertEqual(job.deadline_state(), "")
+
+    def test_company_suggestions(self):
+        from app.company_suggestions import SUGGESTED_COMPANIES
+
+        page = self.client.get("/firmen").get_data(as_text=True)
+        self.assertIn("MMC Studios Köln", page)
+        self.client.post("/firmen/vorschlaege", data={"name": "MMC Studios Köln"})
+        self.assertEqual(CompanySource.query.count(), 1)
+        self.client.post("/firmen/vorschlaege")
+        self.assertEqual(CompanySource.query.count(), len(SUGGESTED_COMPANIES))
+        self.client.post("/firmen/vorschlaege")
+        self.assertEqual(CompanySource.query.count(), len(SUGGESTED_COMPANIES), "keine Duplikate")
+
+    def test_new_top_jobs_trigger_notification(self):
+        from app import fetch_runner
+
+        SearchProfile.query.delete()
+        db.session.add(SearchProfile(keywords="Mediengestalter", location="Köln", radius_km=25))
+        db.session.commit()
+        with mock.patch.object(http_utils.requests, "get", side_effect=fake_get), \
+                mock.patch.object(fetch_runner, "notify_new_top_jobs") as notify:
+            self.assertTrue(fetch_runner.start_async(self.app))
+            for _ in range(100):
+                if not fetch_runner.state["running"]:
+                    break
+                time.sleep(0.05)
+        titles = notify.call_args[0][0]
+        self.assertIn("Mediengestalter/in Bild und Ton", titles)
+        self.assertNotIn("Kreditorenbuchhalter (m/w/d)", titles)

@@ -16,6 +16,7 @@ sich der Browser von selbst (http://127.0.0.1:8765).
 - Zum Beenden das Terminal-Fenster schließen.
 - Kurz nach dem Start sucht die App automatisch nach neuen Jobs und danach
   stündlich, solange sie läuft.
+- Neue Top-Treffer meldet dein Mac mit einer Mitteilung oben rechts.
 
 ## So arbeitest du damit
 
@@ -26,12 +27,19 @@ sich der Browser von selbst (http://127.0.0.1:8765).
 2. **Job anklicken**: Aufgaben, Voraussetzungen und verlangte Unterlagen
    (als Checkliste), Ansprechpartner mit E-Mail-Button, Links zur Anzeige
    und zur Firmen-Website, dazu Felder für Anschreiben und Notizen.
-3. **Meine Unterlagen**: Lebenslauf, Zeugnisse usw. einmal hochladen und bei
-   jeder Bewerbung mit einem Klick verknüpfen.
-4. **Firmen**: Karriereseiten von Produktionsfirmen und Sendern eintragen.
-   Sie werden bei jeder Suche mit durchsucht.
-5. **Einstellungen**: Suchbegriffe und Orte, Quellen an/aus, API-Schlüssel.
-6. **Status**: Zeigt, ob jede Quelle funktioniert. Bei einem echten Fehler
+   Verlangte Unterlagen hakst du dort ab. Eine **Anschreiben-Vorlage** fügst du
+   mit einem Klick ein, Anrede, Firma und Stelle sind dabei schon ausgefüllt.
+3. **Beworben**: Ziehst du eine Karte nach „Beworben“, trägt die App das Datum
+   ein. Nach 14 Tagen erscheint oben im Board „Nachfassen fällig“.
+   Bewerbungsfristen aus der Anzeige werden erkannt und kurz vorher markiert.
+4. **Meine Unterlagen**: Lebenslauf, Zeugnisse usw. einmal hochladen und bei
+   jeder Bewerbung mit einem Klick verknüpfen. Dort pflegst du auch deine
+   Anschreiben-Vorlagen mit Platzhaltern wie `{anrede}` und `{firma}`.
+5. **Firmen**: Karriereseiten von Produktionsfirmen und Sendern eintragen. Sie
+   werden bei jeder Suche mit durchsucht. Eine Vorschlagsliste mit Film- und
+   TV-Firmen in Köln lässt sich per Klick übernehmen.
+6. **Einstellungen**: Suchbegriffe und Orte, Quellen an/aus, API-Schlüssel.
+7. **Status**: Zeigt, ob jede Quelle funktioniert. Bei einem echten Fehler
    erscheint oben ein roter Balken. Klick auf **„Für Claude kopieren“** und
    den Text im Chat einfügen, die Reparatur übernimmt Claude.
 

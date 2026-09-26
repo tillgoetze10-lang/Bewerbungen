@@ -13,6 +13,32 @@
   </form>
 </section>
 
+{% if suggestions %}
+<section class="panel" id="vorschlaege">
+  <div class="panel-head">
+    <h3>Vorschläge: Film &amp; TV in Köln</h3>
+    <form action="{{ url_for('board.add_suggestions') }}" method="post" class="inline-form">
+      <button type="submit" class="ghost small">Alle {{ suggestions|length }} hinzufügen</button>
+    </form>
+  </div>
+  <p class="hint">Recherchiert im September 2026. Ob eine Seite auslesbar ist, siehst du nach dem ersten Suchlauf unter „Status“.</p>
+  <ul class="suggestion-list">
+    {% for s in suggestions %}
+    <li>
+      <div>
+        <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.name }} ↗</a>
+        <span class="hint">{{ s.note }}</span>
+      </div>
+      <form action="{{ url_for('board.add_suggestions') }}" method="post" class="inline-form">
+        <input type="hidden" name="name" value="{{ s.name }}">
+        <button type="submit" class="ghost small">+ Hinzufügen</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 <table class="doc-table">
   <thead><tr><th>Firma</th><th>Status</th><th>Letzter Suchlauf</th><th></th></tr></thead>
   <tbody>

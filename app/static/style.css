@@ -456,3 +456,26 @@ details.panel[open] > summary { margin-bottom: 0.8rem; }
 .inline-check { display: inline-flex; align-items: center; gap: 0.3rem; }
 .inline-check input { width: auto; }
 .archive-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; }
+
+/* ---- Vorschlaege, Vorlagen, Fahrplan ---- */
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.panel-head h3 { margin: 0; }
+.suggestion-list { list-style: none; padding: 0; margin: 0; }
+.suggestion-list li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-soft); }
+.suggestion-list li .hint { display: block; }
+.section-title { margin-top: 2rem; }
+.placeholder-list { margin: 0; padding-left: 1.1rem; color: var(--text-muted); font-size: 0.88rem; line-height: 1.8; }
+code { background: var(--bg-elevated); border: 1px solid var(--border-soft); border-radius: 4px; padding: 0 0.3rem; font-size: 0.85em; }
+.row-actions.left { text-align: left; }
+.checkbox-list { list-style: none; padding: 0; margin: 0 0 0.6rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.checkbox-list input { accent-color: var(--success); width: 16px; height: 16px; }
+details.subtle > summary { cursor: pointer; font-size: 0.8rem; color: var(--text-faint); margin: 0.2rem 0 0.4rem; }
+.card-docs.complete { color: var(--success); }
+.card-top .badge + .badge { margin-left: 0; }
+.follow-up-panel { background: var(--info-bg); border-color: var(--info-border); display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+.follow-up-panel strong { color: var(--info); }
+.follow-up-item { display: inline-flex; align-items: center; gap: 0.4rem; }
+
+.stack label.inline-check, label.inline-check { flex-direction: row; align-items: center; gap: 0.5rem; color: var(--text); font-size: 0.9rem; }
+.stack input[type=checkbox], .checkbox-list input { width: 16px; height: 16px; flex: none; }
+button.small { white-space: nowrap; }

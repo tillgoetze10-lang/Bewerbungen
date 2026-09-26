@@ -6,7 +6,9 @@ import logging
 import threading
 from datetime import datetime
 
+from .config import load_config
 from .fetch_jobs import run_fetch_cycle
+from .notify import notify_new_top_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,8 @@ def _execute(app):
     try:
         result = run_fetch_cycle(app, progress=_progress)
         state["new_jobs"] = result["new_jobs"]
+        if load_config().get("notify_new_top", True):
+            notify_new_top_jobs(result.get("new_top", []))
         errors = sum(1 for _, kind, _ in result["problems"] if kind == "error")
         if result.get("offline"):
             summary = "Keine Internetverbindung – die Suche wird beim nächsten Mal automatisch nachgeholt."

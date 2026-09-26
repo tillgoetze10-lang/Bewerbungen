@@ -38,4 +38,39 @@
     {% endfor %}
   </tbody>
 </table>
+
+<h2 id="vorlagen" class="section-title">Anschreiben-Vorlagen</h2>
+<p class="hint">Einmal schreiben, bei jeder Bewerbung einfügen. Platzhalter wie <code>{anrede}</code> oder <code>{firma}</code>
+  werden automatisch mit den Daten der Stelle gefüllt.</p>
+<details class="panel narrow">
+  <summary>Verfügbare Platzhalter</summary>
+  <ul class="placeholder-list">
+    {% for key, meaning in placeholders %}<li><code>{{ key }}</code> – {{ meaning }}</li>{% endfor %}
+  </ul>
+</details>
+
+{% for t in templates %}
+<details class="panel narrow" {% if loop.first and templates|length == 1 %}open{% endif %}>
+  <summary>{{ t.name }}</summary>
+  <form action="{{ url_for('board.save_template', template_id=t.id) }}" method="post" class="stack">
+    <label>Name <input type="text" name="name" value="{{ t.name }}" required></label>
+    <label>Text <textarea name="body" rows="16">{{ t.body }}</textarea></label>
+    <div class="row-actions left">
+      <button type="submit">Speichern</button>
+    </div>
+  </form>
+  <form action="{{ url_for('board.delete_template', template_id=t.id) }}" method="post" onsubmit="return confirm('Vorlage löschen?')">
+    <button type="submit" class="ghost small danger-text">Vorlage löschen</button>
+  </form>
+</details>
+{% endfor %}
+
+<details class="panel narrow">
+  <summary>+ Neue Vorlage</summary>
+  <form action="{{ url_for('board.save_template') }}" method="post" class="stack">
+    <label>Name <input type="text" name="name" placeholder="z. B. Set-Jobs (du-Form)" required></label>
+    <label>Text <textarea name="body" rows="12" placeholder="{anrede_du}&#10;&#10;…"></textarea></label>
+    <button type="submit">Vorlage anlegen</button>
+  </form>
+</details>
 {% endblock %}

@@ -11,3 +11,9 @@ fetch_on_startup: true
 fetch_job_details: true
 
 http_timeout_seconds: 15
+
+# Mac-Mitteilung, wenn ein Suchlauf neue Top-Treffer findet.
+notify_new_top: true
+
+# Nach wie vielen Tagen nach "Beworben" an das Nachfassen erinnert wird.
+follow_up_days: 14

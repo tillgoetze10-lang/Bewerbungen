@@ -1,6 +1,7 @@
 import os
 import subprocess
 import uuid
+from datetime import date, timedelta
 from urllib.parse import urlparse
 
 from flask import (
@@ -8,15 +9,18 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .config import BASE_DIR
+from .company_suggestions import open_suggestions
+from .config import BASE_DIR, load_config
 from .extraction import empty_result
 from .fetch_jobs import (
-    apply_details, job_from_listing, load_details, merge_details_into_listing, missing_settings, runtime_config,
+    DETAIL_FIELDS, apply_details, job_from_listing, load_details, merge_details_into_listing, missing_settings, runtime_config,
 )
 from .fetch_runner import snapshot, start_async
+from .letters import PLACEHOLDERS, fill_template
 from .matching import score_job
 from .models import (
-    STATUS_ARCHIVIERT, STATUS_FLOW, STATUS_KEYS, AppSetting, CompanySource, Document, Job, JobDocument,
+    STATUS_ARCHIVIERT, STATUS_FLOW, STATUS_KEYS, AppSetting, CompanySource, CoverLetterTemplate, Document, Job,
+    JobDocument,
     ScraperRun, SearchProfile, SourceSetting, db, is_web_url, make_external_id,
 )
 from .scrapers import REGISTRY, SOURCE_HINTS, SOURCE_LABELS, source_label
@@ -35,6 +39,26 @@ def _safe_next(default_endpoint="board.board", **kwargs):
     if referrer and urlparse(referrer).netloc == request.host:
         return referrer
     return url_for(default_endpoint, **kwargs)
+
+
+def _parse_date(value):
+    try:
+        return date.fromisoformat((value or "").strip()) if value else None
+    except ValueError:
+        return None
+
+
+def _follow_up_days():
+    try:
+        return int(load_config().get("follow_up_days") or 14)
+    except (TypeError, ValueError):
+        return 14
+
+
+def _set_status(job, new_status):
+    job.status = new_status
+    if new_status == "beworben":
+        job.mark_applied(follow_up_days=_follow_up_days())
 
 
 def _clean_web_url(value: str) -> str:
@@ -58,7 +82,9 @@ def board():
             jobs = [j for j in jobs if j.match_label != "unpassend"]
         columns.append({"key": key, "label": label, "jobs": jobs, "hidden_jobs": hidden})
     archived_count = Job.query.filter_by(status=STATUS_ARCHIVIERT).count()
-    return render_template("board.html", columns=columns, archived_count=archived_count, status_flow=STATUS_FLOW)
+    follow_ups = [j for j in Job.query.filter_by(status="beworben").order_by(Job.follow_up_at).all() if j.follow_up_due()]
+    return render_template("board.html", columns=columns, archived_count=archived_count, status_flow=STATUS_FLOW,
+                           follow_ups=follow_ups)
 
 
 @bp.route("/archiv")
@@ -74,7 +100,7 @@ def update_status(job_id):
     new_status = data.get("status")
     ok = new_status in STATUS_KEYS + [STATUS_ARCHIVIERT]
     if ok:
-        job.status = new_status
+        _set_status(job, new_status)
         db.session.commit()
     if request.is_json:
         return jsonify({"ok": ok, "status": job.status})
@@ -110,9 +136,12 @@ def job_detail(job_id):
     job = db.get_or_404(Job, job_id)
     linked_doc_ids = {jd.document_id for jd in job.documents}
     library_docs = Document.query.order_by(Document.doc_type, Document.title).all()
+    templates = [{"id": t.id, "name": t.name, "text": fill_template(t.body, job)}
+                 for t in CoverLetterTemplate.query.order_by(CoverLetterTemplate.name).all()]
     return render_template(
         "job_detail.html",
         job=job,
+        letter_templates=templates,
         status_flow=STATUS_FLOW,
         archiv_status=STATUS_ARCHIVIERT,
         library_docs=library_docs,
@@ -130,6 +159,15 @@ def save_job(job_id):
             setattr(job, field, request.form.get(field, "").strip())
     if "company_website" in request.form:
         job.company_website = _clean_web_url(request.form.get("company_website", ""))
+    if "contact_salutation" in request.form:
+        salutation = request.form.get("contact_salutation", "")
+        job.contact_salutation = salutation if salutation in ("Frau", "Herr") else ""
+    if "docs_checklist_present" in request.form:
+        done = [d for d in request.form.getlist("docs_done") if d in job.document_checklist()]
+        job.docs_done = ", ".join(done)
+    for field in ("deadline", "applied_at", "follow_up_at"):
+        if field in request.form:
+            setattr(job, field, _parse_date(request.form.get(field)))
     db.session.commit()
     flash("Gespeichert.", "success")
     return redirect(url_for("board.job_detail", job_id=job.id))
@@ -150,8 +188,7 @@ def reextract_job(job_id):
         flash("Die Anzeige ließ sich nicht erneut abrufen (offline genommen, Bot-Schutz oder robots.txt).", "error")
         return redirect(url_for("board.job_detail", job_id=job.id))
 
-    previous = {f: getattr(job, f) for f in ("tasks", "requirements", "application_documents", "contact_name",
-                                             "contact_email", "contact_phone", "company_website")}
+    previous = {f: getattr(job, f) for f in DETAIL_FIELDS}
     apply_details(job, details)
     for field, old in previous.items():
         if not getattr(job, field) and old:
@@ -159,6 +196,18 @@ def reextract_job(job_id):
     db.session.commit()
     flash(f"Neu ausgelesen: {job.extraction_confidence_text()}.", "info")
     return redirect(url_for("board.job_detail", job_id=job.id))
+
+
+@bp.route("/job/<int:job_id>/nachgefasst", methods=["POST"])
+def followed_up(job_id):
+    job = db.get_or_404(Job, job_id)
+    today = date.today()
+    line = f"{today:%d.%m.%Y}: nachgefasst."
+    job.notes = f"{job.notes}\n{line}".strip() if job.notes else line
+    job.follow_up_at = today + timedelta(days=_follow_up_days()) if request.form.get("again") else None
+    db.session.commit()
+    flash("Notiert. " + ("Nächste Erinnerung in zwei Wochen." if job.follow_up_at else "Erinnerung erledigt."), "success")
+    return redirect(_safe_next())
 
 
 @bp.route("/job/<int:job_id>/documents/link", methods=["POST"])
@@ -198,7 +247,33 @@ def _allowed_file(filename):
 @bp.route("/unterlagen")
 def documents():
     docs = Document.query.order_by(Document.doc_type, Document.title).all()
-    return render_template("documents.html", docs=docs, doc_types=DOC_TYPES, doc_type_labels=dict(DOC_TYPES))
+    templates = CoverLetterTemplate.query.order_by(CoverLetterTemplate.name).all()
+    return render_template("documents.html", docs=docs, doc_types=DOC_TYPES, doc_type_labels=dict(DOC_TYPES),
+                           templates=templates, placeholders=PLACEHOLDERS)
+
+
+@bp.route("/vorlagen", methods=["POST"])
+@bp.route("/vorlagen/<int:template_id>", methods=["POST"])
+def save_template(template_id=None):
+    template = db.get_or_404(CoverLetterTemplate, template_id) if template_id else CoverLetterTemplate()
+    name = request.form.get("name", "").strip()
+    if not name:
+        flash("Bitte der Vorlage einen Namen geben.", "error")
+        return redirect(url_for("board.documents") + "#vorlagen")
+    template.name = name[:120]
+    template.body = request.form.get("body", "")
+    db.session.add(template)
+    db.session.commit()
+    flash(f"Vorlage „{template.name}“ gespeichert.", "success")
+    return redirect(url_for("board.documents") + "#vorlagen")
+
+
+@bp.route("/vorlagen/<int:template_id>/delete", methods=["POST"])
+def delete_template(template_id):
+    db.session.delete(db.get_or_404(CoverLetterTemplate, template_id))
+    db.session.commit()
+    flash("Vorlage gelöscht.", "info")
+    return redirect(url_for("board.documents") + "#vorlagen")
 
 
 @bp.route("/unterlagen/upload", methods=["POST"])
@@ -303,7 +378,23 @@ def add_job():
 @bp.route("/firmen")
 def companies():
     sources = CompanySource.query.order_by(CompanySource.name).all()
-    return render_template("companies.html", sources=sources)
+    return render_template("companies.html", sources=sources, suggestions=open_suggestions(sources))
+
+
+@bp.route("/firmen/vorschlaege", methods=["POST"])
+def add_suggestions():
+    wanted = request.form.get("name")  # leer = alle
+    existing = CompanySource.query.all()
+    added = []
+    for suggestion in open_suggestions(existing):
+        if wanted and suggestion["name"] != wanted:
+            continue
+        db.session.add(CompanySource(name=suggestion["name"], career_url=suggestion["url"], active=True))
+        added.append(suggestion["name"])
+    db.session.commit()
+    if added:
+        flash(f"Hinzugefügt: {', '.join(added)}. Wird ab dem nächsten Suchlauf durchsucht.", "success")
+    return redirect(url_for("board.companies"))
 
 
 @bp.route("/firmen/hinzufuegen", methods=["POST"])

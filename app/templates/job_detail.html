@@ -7,6 +7,9 @@
   <div class="detail-main">
     <div class="detail-header">
       <span class="badge badge-{{ job.match_label or 'pruefen' }}">{{ job.match_label_text() }} · {{ job.match_percent() }} %</span>
+      {% if job.deadline_state() == 'bald' %}<span class="badge badge-pruefen">Frist {{ job.deadline.strftime('%d.%m.') }}</span>
+      {% elif job.deadline_state() == 'abgelaufen' %}<span class="badge badge-unpassend">Frist abgelaufen ({{ job.deadline.strftime('%d.%m.') }})</span>{% endif %}
+      {% if job.follow_up_due() %}<span class="badge badge-info">Nachfassen fällig</span>{% endif %}
       <h1>{{ job.title }}</h1>
       <p class="card-meta">
         {{ job.company or "Firma unbekannt" }}{% if job.location %} · {{ job.location }}{% endif %}
@@ -38,17 +41,36 @@
 
       <section class="panel">
         <h3>Bewerbungsunterlagen – das wird verlangt</h3>
-        {% if job.document_checklist() %}
-        <ul class="checklist">
-          {% for doc in job.document_checklist() %}<li>{{ doc }}</li>{% endfor %}
+        {% set required = job.document_checklist() %}
+        {% if required %}
+        <input type="hidden" name="docs_checklist_present" value="1">
+        <ul class="checkbox-list">
+          {% for doc in required %}
+          <li><label class="inline-check"><input type="checkbox" name="docs_done" value="{{ doc }}" {% if doc in job.docs_done_list() %}checked{% endif %}> {{ doc }}</label></li>
+          {% endfor %}
         </ul>
         {% endif %}
-        <input type="text" name="application_documents" value="{{ job.application_documents }}" placeholder="z. B. Anschreiben, Lebenslauf, Showreel (durch Komma getrennt)">
+        <details class="subtle">
+          <summary>Liste bearbeiten</summary>
+          <input type="text" name="application_documents" value="{{ job.application_documents }}" placeholder="z. B. Anschreiben, Lebenslauf, Showreel (durch Komma getrennt)">
+        </details>
       </section>
 
       <section class="panel">
-        <h3>Anschreiben</h3>
-        <textarea name="cover_letter" rows="16" placeholder="Dein Anschreiben für diese Stelle …">{{ job.cover_letter }}</textarea>
+        <div class="panel-head">
+          <h3>Anschreiben</h3>
+          {% if letter_templates %}
+          <div class="inline-form">
+            <select id="template-select" aria-label="Vorlage">
+              {% for t in letter_templates %}<option value="{{ loop.index0 }}">{{ t.name }}</option>{% endfor %}
+            </select>
+            <button type="button" class="ghost small" id="insert-template">Vorlage einfügen</button>
+          </div>
+          {% endif %}
+        </div>
+        <textarea name="cover_letter" id="cover-letter" rows="16" placeholder="Dein Anschreiben für diese Stelle – oder oben eine Vorlage einfügen.">{{ job.cover_letter }}</textarea>
+        <p class="hint">Vorlagen bearbeitest du unter <a href="{{ url_for('board.documents') }}#vorlagen">Meine Unterlagen</a>.
+          <button type="button" class="ghost small" id="copy-letter">Text kopieren</button></p>
       </section>
 
       <section class="panel">
@@ -85,8 +107,32 @@
     </section>
 
     <section class="panel">
+      <h3>Fahrplan</h3>
+      <div class="stack">
+        <label>Bewerbungsfrist <input form="job-form" type="date" name="deadline" value="{{ job.deadline.isoformat() if job.deadline else '' }}"></label>
+        <label>Beworben am <input form="job-form" type="date" name="applied_at" value="{{ job.applied_at.isoformat() if job.applied_at else '' }}"></label>
+        <label>Nachfassen am <input form="job-form" type="date" name="follow_up_at" value="{{ job.follow_up_at.isoformat() if job.follow_up_at else '' }}"></label>
+      </div>
+      <p class="hint">Beim Verschieben nach „Beworben“ trägt die App das Datum ein und erinnert dich nach 14 Tagen ans Nachfassen.</p>
+      {% if job.follow_up_due() %}
+      <form action="{{ url_for('board.followed_up', job_id=job.id) }}" method="post" class="inline-form">
+        <input type="hidden" name="next" value="{{ url_for('board.job_detail', job_id=job.id) }}">
+        <button type="submit" class="small">Nachgefasst ✓</button>
+        <button type="submit" name="again" value="1" class="ghost small">Nachgefasst, in 2 Wochen wieder</button>
+      </form>
+      {% endif %}
+    </section>
+
+    <section class="panel">
       <h3>Ansprechpartner</h3>
       <div class="stack">
+        <label>Anrede
+          <select form="job-form" name="contact_salutation" class="full">
+            <option value="" {% if not job.contact_salutation %}selected{% endif %}>unbekannt</option>
+            <option value="Frau" {% if job.contact_salutation == 'Frau' %}selected{% endif %}>Frau</option>
+            <option value="Herr" {% if job.contact_salutation == 'Herr' %}selected{% endif %}>Herr</option>
+          </select>
+        </label>
         <label>Name <input form="job-form" type="text" name="contact_name" value="{{ job.contact_name }}" placeholder="nicht gefunden"></label>
         <label>E-Mail <input form="job-form" type="email" name="contact_email" value="{{ job.contact_email }}" placeholder="nicht gefunden"></label>
         <label>Telefon <input form="job-form" type="text" name="contact_phone" value="{{ job.contact_phone }}" placeholder="nicht gefunden"></label>
@@ -140,9 +186,30 @@
   // Warnen, bevor ungespeicherte Aenderungen (z.B. am Anschreiben) verloren gehen.
   (function () {
     const form = document.getElementById("job-form");
+    const hint = document.getElementById("save-hint");
     let dirty = false;
-    document.querySelectorAll('[form="job-form"], #job-form textarea, #job-form input').forEach((el) => {
-      el.addEventListener("input", () => { dirty = true; document.getElementById("save-hint").textContent = "Ungespeicherte Änderungen"; });
+    function markDirty() { dirty = true; hint.textContent = "Ungespeicherte Änderungen"; }
+    document.querySelectorAll('[form="job-form"], #job-form textarea, #job-form input, #job-form select').forEach((el) => {
+      el.addEventListener("input", markDirty);
+      el.addEventListener("change", markDirty);
+    });
+
+    // Vorlage einfuegen: Platzhalter sind serverseitig schon mit den Job-Daten gefuellt.
+    const templates = {{ letter_templates|tojson }};
+    const letter = document.getElementById("cover-letter");
+    const insert = document.getElementById("insert-template");
+    if (insert) {
+      insert.addEventListener("click", () => {
+        const chosen = templates[Number(document.getElementById("template-select").value)];
+        if (!chosen) return;
+        if (letter.value.trim() && !confirm("Das vorhandene Anschreiben durch die Vorlage ersetzen?")) return;
+        letter.value = chosen.text;
+        letter.focus();
+        markDirty();
+      });
+    }
+    document.getElementById("copy-letter").addEventListener("click", (e) => {
+      navigator.clipboard.writeText(letter.value).then(() => { e.target.textContent = "Kopiert!"; setTimeout(() => { e.target.textContent = "Text kopieren"; }, 2500); });
     });
     form.addEventListener("submit", () => { dirty = false; });
     window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });

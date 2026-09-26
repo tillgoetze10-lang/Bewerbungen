@@ -8,7 +8,7 @@ Aufruf von Hand:       python -m app.fetch_jobs
 
 import logging
 import sys
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
@@ -81,10 +81,18 @@ def merge_details_into_listing(listing, details):
         listing.description = details["page_text"]
 
 
+DETAIL_FIELDS = ("tasks", "requirements", "application_documents", "contact_name", "contact_salutation",
+                 "contact_email", "contact_phone", "company_website")
+
+
 def apply_details(job, details):
-    for field in ("tasks", "requirements", "application_documents", "contact_name",
-                  "contact_email", "contact_phone", "company_website"):
+    for field in DETAIL_FIELDS:
         setattr(job, field, details.get(field, "") or "")
+    if details.get("deadline"):
+        try:
+            job.deadline = date.fromisoformat(details["deadline"])
+        except ValueError:
+            pass
     job.extraction_confidence = details.get("confidence", "unsicher")
     job.extraction_missing = ",".join(details.get("missing_fields", []))
 
@@ -110,8 +118,9 @@ def job_from_listing(listing, details, score, label, reason):
     return job
 
 
-def store_listing(listing, config, seen_ids) -> bool:
-    """Legt einen Job an, falls neu und fachlich passend. True = neu angelegt."""
+def store_listing(listing, config, seen_ids, new_top=None) -> bool:
+    """Legt einen Job an, falls neu und fachlich passend. True = neu angelegt.
+    Titel neuer Top-Treffer landen in new_top (fuer die Mac-Mitteilung)."""
     if not listing.is_valid():
         return False
     ext_id = make_external_id(listing.url)
@@ -138,6 +147,8 @@ def store_listing(listing, config, seen_ids) -> bool:
     except IntegrityError:
         db.session.rollback()
         return False
+    if new_top is not None and label == "top":
+        new_top.append(listing.title)
     return True
 
 
@@ -186,7 +197,7 @@ def _summarize(attempts: int, errors, new_jobs: int, skipped: int):
     return kind, text or "Keine Suche erfolgreich."
 
 
-def _run_source(name, module, profiles, config, seen_ids, progress):
+def _run_source(name, module, profiles, config, seen_ids, progress, new_top):
     runs = profiles if getattr(module, "PER_PROFILE", True) else profiles[:1]
     new_jobs, errors, blocked_streak, attempts = 0, [], 0, 0
     for index, profile in enumerate(runs):
@@ -208,7 +219,7 @@ def _run_source(name, module, profiles, config, seen_ids, progress):
             continue
         for listing in listings:
             try:
-                if store_listing(listing, config, seen_ids):
+                if store_listing(listing, config, seen_ids, new_top):
                     new_jobs += 1
             except Exception:
                 logger.exception("[%s] Job konnte nicht gespeichert werden: %s", name, listing.url)
@@ -226,7 +237,7 @@ def _recently_ran(source: str, hours: int) -> bool:
 
 def run_fetch_cycle(app, progress=None):
     progress = progress or (lambda step: None)
-    total_new, problems, run_ids, any_success = 0, [], [], False
+    total_new, problems, run_ids, any_success, new_top = 0, [], [], False, []
 
     with app.app_context():
         config = runtime_config()
@@ -242,7 +253,7 @@ def run_fetch_cycle(app, progress=None):
             if not profiles:
                 _record_run(name, "config", "Keine aktiven Suchprofile – unter Einstellungen anlegen.", 0)
                 continue
-            new_jobs, errors, attempts, skipped = _run_source(name, module, profiles, config, seen_ids, progress)
+            new_jobs, errors, attempts, skipped = _run_source(name, module, profiles, config, seen_ids, progress, new_top)
             kind, message = _summarize(attempts, errors, new_jobs, skipped)
             run_ids.append(_record_run(name, kind, message, new_jobs))
             total_new += new_jobs
@@ -271,7 +282,7 @@ def run_fetch_cycle(app, progress=None):
             found = 0
             for listing in listings:
                 try:
-                    if store_listing(listing, config, seen_ids):
+                    if store_listing(listing, config, seen_ids, new_top):
                         found += 1
                 except Exception:
                     logger.exception("[%s] Job konnte nicht gespeichert werden", company.source_key)
@@ -286,7 +297,7 @@ def run_fetch_cycle(app, progress=None):
         db.session.commit()
 
     logger.info("Suchlauf fertig: %s neue Jobs, %s Quelle(n) mit Problemen", total_new, len(problems))
-    return {"new_jobs": total_new, "problems": problems, "offline": offline}
+    return {"new_jobs": total_new, "problems": problems, "offline": offline, "new_top": new_top}
 
 
 if __name__ == "__main__":

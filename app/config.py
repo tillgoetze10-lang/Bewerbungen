@@ -20,6 +20,8 @@ DEFAULTS = {
     "fetch_interval_minutes": 60,
     "fetch_on_startup": True,
     "fetch_job_details": True,
+    "notify_new_top": True,
+    "follow_up_days": 14,
     "http_timeout_seconds": 15,
     "user_agent": "Mozilla/5.0 (compatible; PersoenlicherJobBot/1.0; privater Gebrauch)",
 }

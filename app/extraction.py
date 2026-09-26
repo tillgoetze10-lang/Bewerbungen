@@ -9,6 +9,7 @@ als "bitte pruefen" an, alle Felder bleiben von Hand korrigierbar.
 
 import html as html_lib
 import re
+from datetime import date
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, Tag
@@ -17,7 +18,7 @@ from .scrapers.jsonld import extract_raw_jobposting_node, html_to_text, jobposti
 
 FIELDS = [
     "tasks", "requirements", "application_documents",
-    "contact_name", "contact_email", "contact_phone", "company_website",
+    "contact_name", "contact_salutation", "contact_email", "contact_phone", "company_website",
 ]
 # Telefon fehlt bewusst: steht selten in Anzeigen, soll nicht als "Problem" auftauchen.
 REPORTED_FIELDS = ["tasks", "requirements", "application_documents", "contact_name", "contact_email", "company_website"]
@@ -74,10 +75,10 @@ _LABEL = (
 _NAME_WORD = r"[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)?"
 CONTACT_NAME_RE = re.compile(
     _LABEL + r"[\s:\-–]+(?:(?i:herr|frau|mr\.?|ms\.?|mrs\.?)\s+)?(?:(?:Dr\.|Prof\.)\s+)*"
-    r"(" + _NAME_WORD + r"(?:\s+(?:von\s+|van\s+|de\s+|zu\s+)?" + _NAME_WORD + r"){1,2})"
+    r"(" + _NAME_WORD + r"(?:[ \t]+(?:von[ \t]+|van[ \t]+|de[ \t]+|zu[ \t]+)?" + _NAME_WORD + r"){1,2})"
 )
 SALUTATION_NAME_RE = re.compile(
-    r"(?i:herr|frau)\s+(?:(?:Dr\.|Prof\.)\s+)*(" + _NAME_WORD + r"(?:\s+" + _NAME_WORD + r")?)"
+    r"(?i:herr|frau)\s+(?:(?:Dr\.|Prof\.)\s+)*(" + _NAME_WORD + r"(?:[ \t]+" + _NAME_WORD + r")?)"
 )
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-zA-Z]{2,}")
 PHONE_LABELED_RE = re.compile(r"(?i:tel(?:efon|\.)?|phone|fon|mobil|handy)\s*[.:]?\s*(\+?\(?\d[\d\s/\-().]{5,}\d)")
@@ -225,9 +226,44 @@ def _root_url(url: str) -> str:
 def _find_contact_name(text: str) -> str:
     for regex in (CONTACT_NAME_RE, SALUTATION_NAME_RE):
         for match in regex.finditer(text):
-            name = match.group(1).strip()
-            if not any(word.lower() in NAME_STOPWORDS for word in re.split(r"[\s-]+", name)):
-                return name
+            words = match.group(1).split()
+            # "Tom Becker Personal" -> Stoppwort am Ende abschneiden statt alles zu verwerfen
+            while words and words[-1].lower() in NAME_STOPWORDS:
+                words.pop()
+            if len(words) >= 2 and not any(w.lower() in NAME_STOPWORDS for w in re.split(r"[\s-]+", " ".join(words))):
+                return " ".join(words)
+    return ""
+
+
+def _find_salutation(text: str, name: str) -> str:
+    if not name:
+        return ""
+    match = re.search(r"\b(Frau|Herr|Herrn)\s+(?:(?:Dr\.|Prof\.)\s+)*" + re.escape(name.split()[0]), text)
+    if match:
+        return "Frau" if match.group(1) == "Frau" else "Herr"
+    return ""
+
+
+DEADLINE_RE = re.compile(
+    r"(?i:bewerbungs(?:schluss|frist|ende)|bewirb dich (?:bitte )?bis|bewerbungen? (?:bitte )?bis|"
+    r"einsendeschluss|bis (?:zum|spätestens|spaetestens))\D{0,25}?(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{2,4})"
+)
+
+
+def _find_deadline(text: str, node) -> str:
+    """ISO-Datum (JJJJ-MM-TT) der Bewerbungsfrist oder ""."""
+    if node and isinstance(node.get("validThrough"), str):
+        match = re.match(r"(\d{4})-(\d{2})-(\d{2})", node["validThrough"])
+        if match:
+            return "-".join(match.groups())
+    match = DEADLINE_RE.search(text)
+    if match:
+        day, month, year = (int(g) for g in match.groups())
+        year = year + 2000 if year < 100 else year
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return ""
     return ""
 
 
@@ -316,7 +352,7 @@ def empty_result() -> dict:
     result = {field: "" for field in FIELDS}
     result.update({
         "found_fields": [], "missing_fields": list(REPORTED_FIELDS), "confidence": "unsicher",
-        "listing": {}, "page_text": "",
+        "listing": {}, "page_text": "", "deadline": "",
     })
     return result
 
@@ -354,6 +390,8 @@ def extract_details(html: str, page_url: str = "", company_page: bool = False) -
     result["requirements"] = result["requirements"] or _section(soup, text, REQUIREMENT_HEADINGS)
     result["application_documents"] = _application_documents(soup, text)
     result["contact_name"] = _find_contact_name(text)
+    result["contact_salutation"] = _find_salutation(text, result["contact_name"])
+    result["deadline"] = _find_deadline(text, node)
     result["contact_email"] = _find_email(text, result["contact_name"])
     result["contact_phone"] = _find_phone(text)
     result["company_website"] = _find_company_website(soup, node, result["contact_email"], page_url, company_page)

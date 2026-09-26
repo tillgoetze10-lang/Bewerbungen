@@ -1,6 +1,21 @@
 {% extends "base.html" %}
 {% block title %}Board{% endblock %}
 {% block content %}
+{% if follow_ups %}
+<div class="panel follow-up-panel">
+  <strong>Nachfassen fällig:</strong>
+  {% for job in follow_ups %}
+  <span class="follow-up-item">
+    <a href="{{ url_for('board.job_detail', job_id=job.id) }}">{{ job.title }}{% if job.company %} – {{ job.company }}{% endif %}</a>
+    <span class="hint">(beworben {{ job.applied_at.strftime('%d.%m.') if job.applied_at else '' }})</span>
+    <form action="{{ url_for('board.followed_up', job_id=job.id) }}" method="post" class="inline-form">
+      <input type="hidden" name="next" value="{{ url_for('board.board') }}">
+      <button type="submit" class="ghost small">erledigt</button>
+    </form>
+  </span>
+  {% endfor %}
+</div>
+{% endif %}
 <div class="board">
   {% for column in columns %}
   <section class="column" data-status="{{ column.key }}">

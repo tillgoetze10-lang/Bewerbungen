@@ -1,6 +1,10 @@
 <article class="card" draggable="true" data-job-id="{{ job.id }}">
   <div class="card-top">
     <span class="badge badge-{{ job.match_label or 'pruefen' }}" title="{{ job.match_reason }}">{{ job.match_label_text() }} · {{ job.match_percent() }} %</span>
+    {% set dl = job.deadline_state() %}
+    {% if dl == 'bald' %}<span class="badge badge-pruefen" title="Bewerbungsfrist">Frist {{ job.deadline.strftime('%d.%m.') }}</span>
+    {% elif dl == 'abgelaufen' %}<span class="badge badge-unpassend" title="Bewerbungsfrist abgelaufen">Frist vorbei</span>{% endif %}
+    {% if job.follow_up_due() %}<span class="badge badge-info">Nachfassen</span>{% endif %}
   </div>
   <a class="card-title" href="{{ url_for('board.job_detail', job_id=job.id) }}">{{ job.title }}</a>
   <div class="card-meta">
@@ -8,7 +12,13 @@
   </div>
   <div class="card-source">{{ job.source|source_label }}</div>
   {% if job.document_checklist() %}
-  <div class="card-docs" title="Geforderte Unterlagen">{{ job.document_checklist()|join(' · ') }}</div>
+  {% set done, total = job.docs_progress() %}
+  <div class="card-docs {{ 'complete' if done == total }}" title="{{ job.document_checklist()|join(', ') }}">
+    Unterlagen {{ done }}/{{ total }}{% if job.status in ('neu', 'interessant') %}: {{ job.document_checklist()|join(' · ') }}{% endif %}
+  </div>
+  {% endif %}
+  {% if job.applied_at and job.status in ('beworben', 'rueckmeldung') %}
+  <div class="card-docs">Beworben am {{ job.applied_at.strftime('%d.%m.%Y') }}</div>
   {% endif %}
   <div class="card-actions">
     <form action="{{ url_for('board.update_status', job_id=job.id) }}" method="post" class="inline-form">

@@ -12,7 +12,7 @@ import logging
 from sqlalchemy import inspect, text
 
 from .config import load_config
-from .models import AppSetting, Job, SearchProfile, SourceSetting, db
+from .models import AppSetting, CoverLetterTemplate, Job, SearchProfile, SourceSetting, db
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,11 @@ def ensure_columns():
 
 
 def seed_defaults():
+    if CoverLetterTemplate.query.count() == 0:
+        from .letters import DEFAULT_TEMPLATE, DEFAULT_TEMPLATE_NAME
+
+        db.session.add(CoverLetterTemplate(name=DEFAULT_TEMPLATE_NAME, body=DEFAULT_TEMPLATE))
+
     known = {s.name for s in SourceSetting.query.all()}
     for name, enabled in DEFAULT_SOURCES.items():
         if name not in known:

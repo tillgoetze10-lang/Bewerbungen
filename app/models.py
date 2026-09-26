@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from flask_sqlalchemy import SQLAlchemy
 
@@ -61,6 +61,7 @@ class Job(db.Model):
     # daher mit Confidence-Einstufung und im UI korrigierbar.
     tasks = db.Column(db.Text, default="")
     contact_name = db.Column(db.String(200), default="")
+    contact_salutation = db.Column(db.String(10), default="")  # "Frau" | "Herr" | ""
     contact_email = db.Column(db.String(200), default="")
     contact_phone = db.Column(db.String(100), default="")
     company_website = db.Column(db.String(500), default="")
@@ -68,6 +69,12 @@ class Job(db.Model):
     application_documents = db.Column(db.Text, default="")
     extraction_confidence = db.Column(db.String(20), default="unsicher")
     extraction_missing = db.Column(db.Text, default="")
+
+    # Bewerbungs-Fahrplan
+    deadline = db.Column(db.Date)  # Bewerbungsfrist laut Anzeige
+    docs_done = db.Column(db.Text, default="")  # abgehakte Unterlagen, komma-getrennt
+    applied_at = db.Column(db.Date)
+    follow_up_at = db.Column(db.Date)
 
     documents = db.relationship("JobDocument", backref="job", cascade="all, delete-orphan", lazy="dynamic")
 
@@ -90,6 +97,34 @@ class Job(db.Model):
 
     def document_checklist(self):
         return [d.strip() for d in (self.application_documents or "").split(",") if d.strip()]
+
+    def docs_done_list(self):
+        return [d.strip() for d in (self.docs_done or "").split(",") if d.strip()]
+
+    def docs_progress(self):
+        required = self.document_checklist()
+        done = [d for d in required if d in self.docs_done_list()]
+        return len(done), len(required)
+
+    def follow_up_due(self, today=None):
+        today = today or date.today()
+        return bool(self.follow_up_at and self.follow_up_at <= today and self.status == "beworben")
+
+    def deadline_state(self, today=None):
+        """"" | "bald" (<= 7 Tage) | "abgelaufen" """
+        if not self.deadline or self.status not in ("neu", "interessant", "vorbereitung"):
+            return ""
+        today = today or date.today()
+        if self.deadline < today:
+            return "abgelaufen"
+        return "bald" if self.deadline - today <= timedelta(days=7) else ""
+
+    def mark_applied(self, today=None, follow_up_days=14):
+        today = today or date.today()
+        if not self.applied_at:
+            self.applied_at = today
+        if not self.follow_up_at:
+            self.follow_up_at = self.applied_at + timedelta(days=follow_up_days)
 
     def missing_fields_labels(self):
         from .extraction import FIELD_LABELS
@@ -178,6 +213,17 @@ class AppSetting(db.Model):
     @staticmethod
     def as_dict():
         return {s.key: s.value for s in AppSetting.query.all() if s.value}
+
+
+class CoverLetterTemplate(db.Model):
+    """Anschreiben-Vorlagen mit Platzhaltern (siehe app/letters.py)."""
+
+    __tablename__ = "cover_letter_templates"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    body = db.Column(db.Text, default="")
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
 
 
 class ScraperRun(db.Model):
